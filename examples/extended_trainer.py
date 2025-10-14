@@ -142,8 +142,26 @@ class Config:
 
     # Opacity regularization
     opacity_reg: float = 0.0
-    # Scale regularization
-    scale_reg: float = 0.0
+
+    ### Scale regularization
+    """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
+    scale to be small"""
+    flat_reg: float = 0.1
+    """If scale regularization is enabled, a scale regularization introduced in PhysGauss
+    (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians.
+
+    This implementation adapts the PhysGauss loss to use the ratio of max to median scale
+    instead of max to min, as implemented in mvsanywhere/regsplatfacto. This modification
+    has been found to work better at encouraging Gaussians to be disks.
+    """
+    scale_reg: float = 0.1
+    """Threshold of ratio of Gaussian's max to median scale before applying regularization
+    loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
+
+    The max-to-median ratio modification comes from mvsanywhere/regsplatfacto and has been
+    found to work better at encouraging disk-shaped Gaussians.
+    """
+    max_gauss_ratio: float = 6.0
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -692,8 +710,13 @@ class Runner:
             # regularizations
             if cfg.opacity_reg > 0.0:
                 loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
-            if cfg.scale_reg > 0.0:
-                loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
+
+            # the smallest scale is always near 0
+            if cfg.flat_reg > 0.0:
+                loss += cfg.flat_reg * self.compute_flat_loss()
+            # We follow the original SplatFacto implementation here and only apply this loss every 10 steps
+            if cfg.scale_reg > 0.0 and step % 10 == 0:
+                loss += cfg.scale_reg * self.compute_scale_regularisation_loss_median()
 
             loss.backward()
 
@@ -1156,6 +1179,59 @@ class Runner:
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )
         return renders
+
+    def compute_flat_loss(self) -> torch.Tensor:
+        """
+        Computes the flatness loss. This encourages the smallest scale of each Gaussian to be small.
+
+        This should have the effect of encouraging Gaussians to be disks (or spikes) rather than
+        balls. There is a separate `scale_regularisation_loss` which encourages the Gaussians to
+        be disks rather than spikes.
+
+        Returns:
+            torch.Tensor: The flatness loss as a scalar.
+        """
+        flat_loss = torch.exp(self.splats["scales"]).amin(dim=-1).mean()
+        return flat_loss
+
+    def compute_scale_regularisation_loss_median(self) -> torch.Tensor:
+        """
+        Computes the scale regularisation loss as the ratio between the maximum and median
+        scale of the Gaussians. This is only applied to Gaussians with ratios above
+        self.config.max_gauss_ratio.
+
+        This is adapted from the PhysGauss paper (https://xpandora.github.io/PhysGaussian/).
+        In that paper, they used the ratio of max to min scale. The max-to-median ratio
+        modification comes from mvsanywhere/regsplatfacto and has been found to work better
+        at encouraging disk-shaped Gaussians.
+
+        Returns:
+            torch.Tensor: The scale regularisation loss as a scalar.
+        """
+        # For each Gaussian, compute the ratio between the maximum and median (middle) dimension
+        scale_exp = torch.exp(self.splats["scales"])
+        ratio = scale_exp.amax(dim=-1) / scale_exp.median(dim=-1).values
+
+        # Gaussians with ratios below max_gauss_ratio have no loss applied to them.
+        # Gaussians with ratios above max_gauss_ratio have their ratio minimised.
+        # The following diagram shows how the scale_reg loss varies as the ratio varies:
+        #
+        #           ▲
+        #           │
+        #           │       max_gauss_ratio       x
+        #           │               │           x
+        # scale_reg │               │         x
+        #           │               │       x
+        #           │               │     x
+        #           │               │   x
+        #           │               ▼ x
+        #       0.0 └xxxxxxxxxxxxxxxx──────────────────►
+        #           1.0
+        #                          ratio
+        #
+        max_gauss_ratio = torch.tensor(self.cfg.max_gauss_ratio)
+        scale_reg = torch.maximum(ratio, max_gauss_ratio) - max_gauss_ratio
+        return scale_reg.mean()  # this has a weighting applied in get_loss_dict
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
