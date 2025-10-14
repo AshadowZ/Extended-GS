@@ -1569,9 +1569,11 @@
         <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">thin_prism_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">ftheta_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
-        <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">(),</span>
+        <span class="p">(</span>
+            <span class="n">ftheta_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">()</span>
+        <span class="p">),</span>
     <span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
         <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1839,9 +1841,13 @@
         <span class="n">tile_size</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span>
         <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span>
 
-        <span class="p">(</span><span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">,</span> <span class="n">v_opacities</span><span class="p">,)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_bwd&quot;</span>
-        <span class="p">)(</span>
+        <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
