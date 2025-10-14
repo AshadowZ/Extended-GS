@@ -8,6 +8,7 @@ from torch import Tensor
 from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
+import math
 
 
 @torch.no_grad()
@@ -173,6 +174,81 @@ def split(
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor):
+            repeats = [2] + [1] * (v.dim() - 1)
+            v_new = v[sel].repeat(repeats)
+            state[k] = torch.cat((v[rest], v_new))
+
+
+@torch.no_grad()
+def long_axis_split(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    mask: Tensor,
+    opacity_reduction: float = 0.6,
+):
+    """Inplace split the Gaussian with the given mask.
+
+    Args:
+        params: A dictionary of parameters.
+        optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        mask: A boolean mask to split the Gaussians.
+        opacity_reduction: Factor to reduce opacity when splitting. Default: 0.6.
+    """
+    device = mask.device
+    sel = torch.where(mask)[0]
+    rest = torch.where(~mask)[0]
+
+    # linear scales (stds)
+    scales = torch.exp(params["scales"][sel])  # [N,3]
+    quats = F.normalize(params["quats"][sel], dim=-1)
+    rotmats = normalized_quat_to_rotmat(quats)  # [N,3,3]
+
+    # ----------- 找最长轴并生成位移 -----------
+    max_values, max_indices = torch.max(scales, dim=1, keepdim=True)  
+    axis_mask = torch.zeros_like(scales, dtype=torch.bool, device=device).scatter(1, max_indices, True)
+
+    samples_local = scales * axis_mask.to(scales.dtype) * 3.0  # [N,3]
+    rate = 0.45
+    x_local = samples_local * rate
+
+    rate_w = 1.0 - rate
+    rate_h = math.sqrt(max(0.0, 1.0 - rate * rate))
+
+    x_pair = torch.stack([x_local, -x_local], dim=0)  # [2,N,3]
+    samples_world = torch.einsum("nij,bnj->bni", rotmats, x_pair)  # [2,N,3]
+
+    # ----------- 分裂参数逻辑 -----------
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        repeats = [2] + [1] * (p.dim() - 1)
+        if name == "means":
+            p_split = (p[sel].unsqueeze(0) + samples_world).reshape(-1, 3)
+        elif name == "scales":
+            new_std_parent = scales.scatter(1, max_indices, max_values * (rate_w / rate_h))
+            new_std_child = new_std_parent * rate_h
+            p_split = torch.log(new_std_child.repeat(repeats))  # [2N,3]
+        elif name == "opacities":
+            # long_axis_split 的透明度逻辑
+            opacity = torch.sigmoid(p[sel])  # [N,1] or [N]
+            reduced = opacity * opacity_reduction
+            p_split = torch.logit(reduced.clamp(min=1e-6, max=1.0 - 1e-6)).repeat(repeats)
+        else:
+            p_split = p[sel].repeat(repeats)
+
+        p_new = torch.cat([p[rest], p_split])
+        p_new = torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
+        return p_new
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
+        return torch.cat([v[rest], v_split])
+
+    # 更新参数与 optimizer
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
+    # 更新 state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
             repeats = [2] + [1] * (v.dim() - 1)
