@@ -66,13 +66,13 @@ class ImprovedStrategy(Strategy):
     """
 
     prune_opa: float = 0.005
-    grow_grad2d: float = 0.0002
+    grow_grad2d: float = 0.0003
     refine_start_iter: int = 500
     refine_stop_iter: int = 15_000
     reset_every: int = 3000
     refine_every: int = 100
-    absgrad: bool = False
-    verbose: bool = False
+    absgrad: bool = True
+    verbose: bool = True
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
     budget: int = 2000000
 
@@ -157,13 +157,17 @@ class ImprovedStrategy(Strategy):
                     f"Now having {len(params['means'])} GSs."
                 )
 
-            # prune GSs
-            n_prune = self._prune_gs(params, optimizers, state, step)
-            if self.verbose:
-                print(
-                    f"Step {step}: {n_prune} GSs pruned. "
-                    f"Now having {len(params['means'])} GSs."
-                )
+            # prune GSs (skip pruning in the last refinement iteration)
+            if step < self.refine_stop_iter - self.refine_every:
+                n_prune = self._prune_gs(params, optimizers, state, step)
+                if self.verbose:
+                    print(
+                        f"Step {step}: {n_prune} GSs pruned. "
+                        f"Now having {len(params['means'])} GSs."
+                    )
+            else:
+                if self.verbose:
+                    print(f"Step {step}: Skipping pruning in the last refinement iteration.")
 
             # reset running stats
             state["grad2d"].zero_()

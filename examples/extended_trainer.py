@@ -1225,7 +1225,7 @@ if __name__ == "__main__":
             Config(
                 strategy=ImprovedStrategy(
                     prune_opa=0.005,
-                    grow_grad2d=0.0003,
+                    grow_grad2d=0.0002,
                     refine_start_iter=500,
                     refine_stop_iter=15_000,
                     reset_every=3000,
