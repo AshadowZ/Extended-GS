@@ -146,7 +146,7 @@ class Config:
     ### Scale regularization
     """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
     scale to be small"""
-    flat_reg: float = 0.1
+    flat_reg: float = 0.0
     """If scale regularization is enabled, a scale regularization introduced in PhysGauss
     (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians.
 
@@ -154,7 +154,7 @@ class Config:
     instead of max to min, as implemented in mvsanywhere/regsplatfacto. This modification
     has been found to work better at encouraging Gaussians to be disks.
     """
-    scale_reg: float = 0.1
+    scale_reg: float = 0.0
     """Threshold of ratio of Gaussian's max to median scale before applying regularization
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
 
