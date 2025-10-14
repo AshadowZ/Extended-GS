@@ -207,8 +207,10 @@ def long_axis_split(
     rotmats = normalized_quat_to_rotmat(quats)  # [N,3,3]
 
     # ----------- 找最长轴并生成位移 -----------
-    max_values, max_indices = torch.max(scales, dim=1, keepdim=True)  
-    axis_mask = torch.zeros_like(scales, dtype=torch.bool, device=device).scatter(1, max_indices, True)
+    max_values, max_indices = torch.max(scales, dim=1, keepdim=True)
+    axis_mask = torch.zeros_like(scales, dtype=torch.bool, device=device).scatter(
+        1, max_indices, True
+    )
 
     samples_local = scales * axis_mask.to(scales.dtype) * 3.0  # [N,3]
     rate = 0.45
@@ -226,14 +228,18 @@ def long_axis_split(
         if name == "means":
             p_split = (p[sel].unsqueeze(0) + samples_world).reshape(-1, 3)
         elif name == "scales":
-            new_std_parent = scales.scatter(1, max_indices, max_values * (rate_w / rate_h))
+            new_std_parent = scales.scatter(
+                1, max_indices, max_values * (rate_w / rate_h)
+            )
             new_std_child = new_std_parent * rate_h
             p_split = torch.log(new_std_child.repeat(repeats))  # [2N,3]
         elif name == "opacities":
             # long_axis_split 的透明度逻辑
             opacity = torch.sigmoid(p[sel])  # [N,1] or [N]
             reduced = opacity * opacity_reduction
-            p_split = torch.logit(reduced.clamp(min=1e-6, max=1.0 - 1e-6)).repeat(repeats)
+            p_split = torch.logit(reduced.clamp(min=1e-6, max=1.0 - 1e-6)).repeat(
+                repeats
+            )
         else:
             p_split = p[sel].repeat(repeats)
 

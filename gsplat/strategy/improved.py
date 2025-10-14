@@ -148,10 +148,7 @@ class ImprovedStrategy(Strategy):
 
         self._update_state(params, state, info, packed=packed)
 
-        if (
-            step > self.refine_start_iter
-            and step % self.refine_every == 0
-        ):
+        if step > self.refine_start_iter and step % self.refine_every == 0:
             # grow GSs
             n_split = self._grow_gs(params, optimizers, state, step)
             if self.verbose:
@@ -183,11 +180,7 @@ class ImprovedStrategy(Strategy):
             self.reset_count += 1
 
         # After the first two resets, perform quantile pruning 300 steps after reset
-        if (
-            self.reset_count <= 2
-            and step % self.reset_every == 300
-            and step > 300
-        ):
+        if self.reset_count <= 2 and step % self.reset_every == 300 and step > 300:
             n_quantile_prune = self._quantile_prune_gs(
                 params=params,
                 optimizers=optimizers,
@@ -263,7 +256,7 @@ class ImprovedStrategy(Strategy):
 
         startI = self.refine_start_iter
         endI = self.refine_stop_iter - 500
-        den = (endI - startI)
+        den = endI - startI
         # 计算 rate，防止除以 0，并确保为 float
         if den == 0:
             rate = 1.0
@@ -279,7 +272,7 @@ class ImprovedStrategy(Strategy):
             budget = int(math.sqrt(rate) * float(self.budget))
 
         total_qualified = int(torch.sum(is_grad_high).item())
-        curr_points = params['means'].shape[0]
+        curr_points = params["means"].shape[0]
         theoretical_max = total_qualified + curr_points
         final_budget = min(budget, theoretical_max)
         new_points_needed = final_budget - curr_points
@@ -295,9 +288,7 @@ class ImprovedStrategy(Strategy):
             actual_split_count = min(max(new_points_needed, 0), num_available)
             if actual_split_count > 0:
                 selected_indices = torch.multinomial(
-                    importance_scores,
-                    actual_split_count,
-                    replacement=False
+                    importance_scores, actual_split_count, replacement=False
                 )
                 is_split[selected_indices] = True
 

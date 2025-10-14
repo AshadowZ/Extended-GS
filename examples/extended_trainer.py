@@ -1232,7 +1232,7 @@ if __name__ == "__main__":
                     refine_every=100,
                     absgrad=True,
                     verbose=True,
-                    budget=2000000
+                    budget=2000000,
                 ),
             ),
         ),
