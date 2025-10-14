@@ -167,7 +167,9 @@ class ImprovedStrategy(Strategy):
                     )
             else:
                 if self.verbose:
-                    print(f"Step {step}: Skipping pruning in the last refinement iteration.")
+                    print(
+                        f"Step {step}: Skipping pruning in the last refinement iteration."
+                    )
 
             # reset running stats
             state["grad2d"].zero_()
