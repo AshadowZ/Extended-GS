@@ -13,7 +13,7 @@
 
 namespace gsplat {
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     const at::Tensor means,  // [..., C, N, 3]
     const at::Tensor covars, // [..., C, N, 3, 3]
     const at::Tensor Ks,     // [..., C, 3, 3]
@@ -39,6 +39,14 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     covars2d_shape.append({C, N, 2, 2});
     at::Tensor covars2d = at::empty(covars2d_shape, opt);
 
+    at::DimVector ray_planes_shape(batch_dims);
+    ray_planes_shape.append({C, N, 2});
+    at::Tensor ray_planes = at::empty(ray_planes_shape, opt);
+
+    at::DimVector normals_shape(batch_dims);
+    normals_shape.append({C, N, 3});
+    at::Tensor normals = at::empty(normals_shape, opt);
+
     launch_projection_ewa_simple_fwd_kernel(
         // inputs
         means,
@@ -49,9 +57,11 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
         camera_model,
         // outputs
         means2d,
-        covars2d
+        covars2d,
+        ray_planes,
+        normals
     );
-    return std::make_tuple(means2d, covars2d);
+    return std::make_tuple(means2d, covars2d, ray_planes, normals);
 }
 
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
@@ -62,7 +72,9 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
     const uint32_t height,
     const CameraModelType camera_model,
     const at::Tensor v_means2d, // [..., C, N, 2]
-    const at::Tensor v_covars2d // [..., C, N, 2, 2]
+    const at::Tensor v_covars2d,// [..., C, N, 2, 2]
+    const at::Tensor v_ray_planes, // [..., C, N, 2]
+    const at::Tensor v_normals  // [..., C, N, 3]
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -70,6 +82,8 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
     CHECK_INPUT(Ks);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_covars2d);
+    CHECK_INPUT(v_ray_planes);
+    CHECK_INPUT(v_normals);
 
     auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
@@ -94,6 +108,8 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
         camera_model,
         v_means2d,
         v_covars2d,
+        v_ray_planes,
+        v_normals,
         // outputs
         v_means,
         v_covars
@@ -102,6 +118,9 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
 }
 
 std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
     at::Tensor,
     at::Tensor,
     at::Tensor,
@@ -160,6 +179,15 @@ projection_ewa_3dgs_fused_fwd(
         compensations_shape.append({C, N});
         compensations = at::zeros(compensations_shape, opt);
     }
+    at::DimVector ray_ts_shape(batch_dims);
+    ray_ts_shape.append({C, N});
+    at::Tensor ray_ts = at::empty(ray_ts_shape, opt);
+    at::DimVector ray_planes_shape(batch_dims);
+    ray_planes_shape.append({C, N, 2});
+    at::Tensor ray_planes = at::empty(ray_planes_shape, opt);
+    at::DimVector normals_shape(batch_dims);
+    normals_shape.append({C, N, 3});
+    at::Tensor normals = at::empty(normals_shape, opt);
 
     launch_projection_ewa_3dgs_fused_fwd_kernel(
         // inputs
@@ -183,9 +211,12 @@ projection_ewa_3dgs_fused_fwd(
         depths,
         conics,
         calc_compensations ? at::optional<at::Tensor>(compensations)
-                           : c10::nullopt
+                           : c10::nullopt,
+        ray_ts,
+        ray_planes,
+        normals
     );
-    return std::make_tuple(radii, means2d, depths, conics, compensations);
+    return std::make_tuple(radii, means2d, depths, conics, compensations, ray_ts, ray_planes, normals);
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
@@ -210,6 +241,9 @@ projection_ewa_3dgs_fused_bwd(
     const at::Tensor v_depths,                      // [..., C, N]
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
+    const at::Tensor v_ray_ts,                    // [..., C, N]
+    const at::Tensor v_ray_planes,                // [..., C, N, 2]
+    const at::Tensor v_normals,                   // [..., C, N, 3]
     const bool viewmats_requires_grad
 ) {
     DEVICE_GUARD(means);
@@ -228,6 +262,9 @@ projection_ewa_3dgs_fused_bwd(
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
     CHECK_INPUT(v_conics);
+    CHECK_INPUT(v_ray_ts);
+    CHECK_INPUT(v_ray_planes);
+    CHECK_INPUT(v_normals);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
     }
@@ -268,6 +305,9 @@ projection_ewa_3dgs_fused_bwd(
         v_depths,
         v_conics,
         v_compensations,
+        v_ray_ts,
+        v_ray_planes,
+        v_normals,
         viewmats_requires_grad,
         // outputs
         v_means,
@@ -281,6 +321,9 @@ projection_ewa_3dgs_fused_bwd(
 }
 
 std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
     at::Tensor,
     at::Tensor,
     at::Tensor,
@@ -363,7 +406,10 @@ projection_ewa_3dgs_packed_fwd(
             c10::nullopt, // conics
             // pass in as an indicator on whether compensation will be applied or not.
             calc_compensations ? at::optional<at::Tensor>(at::empty({1}, opt))
-                               : c10::nullopt
+                               : c10::nullopt,
+            c10::nullopt, // ray_ts
+            c10::nullopt, // ray_planes
+            c10::nullopt  // normals
         );
         block_accum = at::cumsum(block_cnts, 0, at::kInt);
         nnz = block_accum[-1].item<int32_t>();
@@ -380,6 +426,9 @@ projection_ewa_3dgs_packed_fwd(
     at::Tensor means2d = at::empty({nnz, 2}, opt);
     at::Tensor depths = at::empty({nnz}, opt);
     at::Tensor conics = at::empty({nnz, 3}, opt);
+    at::Tensor ray_ts = at::empty({nnz}, opt);
+    at::Tensor ray_planes = at::empty({nnz, 2}, opt);
+    at::Tensor normals = at::empty({nnz, 3}, opt);
     at::Tensor compensations;
     if (calc_compensations) {
         // we dont want NaN to appear in this tensor, so we zero intialize it
@@ -415,7 +464,10 @@ projection_ewa_3dgs_packed_fwd(
             depths,
             conics,
             calc_compensations ? at::optional<at::Tensor>(compensations)
-                               : c10::nullopt
+                               : c10::nullopt,
+            ray_ts,
+            ray_planes,
+            normals
         );
     } else {
         indptr.fill_(0);
@@ -430,7 +482,10 @@ projection_ewa_3dgs_packed_fwd(
         means2d,
         depths,
         conics,
-        compensations
+        compensations,
+        ray_ts,
+        ray_planes,
+        normals
     );
 }
 
@@ -458,6 +513,9 @@ projection_ewa_3dgs_packed_bwd(
     const at::Tensor v_depths,                      // [nnz]
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
+    const at::Tensor v_ray_ts,                      // [nnz]
+    const at::Tensor v_ray_planes,                  // [nnz, 2]
+    const at::Tensor v_normals,                     // [nnz, 3]
     const bool viewmats_requires_grad,
     const bool sparse_grad
 ) {
@@ -479,6 +537,9 @@ projection_ewa_3dgs_packed_bwd(
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
     CHECK_INPUT(v_conics);
+    CHECK_INPUT(v_ray_ts);
+    CHECK_INPUT(v_ray_planes);
+    CHECK_INPUT(v_normals);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
     }
@@ -534,6 +595,9 @@ projection_ewa_3dgs_packed_bwd(
         v_depths,
         v_conics,
         v_compensations,
+        v_ray_ts,
+        v_ray_planes,
+        v_normals,
         sparse_grad,
         // outputs
         v_means,

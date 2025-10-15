@@ -535,7 +535,14 @@ class Runner:
             rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         if camera_model is None:
             camera_model = self.cfg.camera_model
-        render_colors, render_alphas, info = rasterization(
+        (
+            render_colors,
+            render_alphas,
+            expected_depths,
+            median_depths,
+            expected_normals,
+            info,
+        ) = rasterization(
             means=means,
             quats=quats,
             scales=scales,
@@ -561,7 +568,14 @@ class Runner:
         )
         if masks is not None:
             render_colors[~masks] = 0
-        return render_colors, render_alphas, info
+        return (
+            render_colors,
+            render_alphas,
+            expected_depths,
+            median_depths,
+            expected_normals,
+            info,
+        )
 
     def train(self):
         cfg = self.cfg
@@ -654,7 +668,7 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            renders, alphas, info = self.rasterize_splats(
+            renders, alphas, _, _, _, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -948,7 +962,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            colors, _, _, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1068,7 +1082,7 @@ class Runner:
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
 
-            renders, _, _ = self.rasterize_splats(
+            renders, _, _, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1130,7 +1144,14 @@ class Runner:
             "alpha": "RGB",
         }
 
-        render_colors, render_alphas, info = self.rasterize_splats(
+        (
+            render_colors,
+            render_alphas,
+            expected_depths,
+            median_depths,
+            expected_normals,
+            info,
+        ) = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
             width=width,
@@ -1152,10 +1173,16 @@ class Runner:
         if render_tab_state.render_mode == "rgb":
             # colors represented with sh are not guranteed to be in [0, 1]
             render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
+            # render_colors = expected_normals[0, ..., 0:3] # [-1, 1]
+            # render_colors = ((-render_colors + 1) / 2.0).clamp(0, 1)
+
             renders = render_colors.cpu().numpy()
         elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
             # normalize depth to [0, 1]
-            depth = render_colors[0, ..., 0:1]
+            # depth = render_colors[0, ..., 0:1]
+            depth = median_depths.squeeze(0)
+            print("depth range:", float(depth.min()), float(depth.max()))
+
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane

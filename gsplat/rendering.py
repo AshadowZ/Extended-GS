@@ -45,7 +45,7 @@ def rasterization(
     radius_clip: float = 0.0,
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
-    packed: bool = True,
+    packed: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
@@ -67,7 +67,7 @@ def rasterization(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
-) -> Tuple[Tensor, Tensor, Dict]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
     This function provides a handful features for 3D Gaussian rasterization, which
@@ -437,17 +437,26 @@ def rasterization(
             depths,
             conics,
             compensations,
+            ray_ts,
+            ray_planes,
+            normals,
         ) = proj_results
         opacities = opacities.view(B, N)[batch_ids, gaussian_ids]  # [nnz]
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics, compensations = proj_results
+        radii, means2d, depths, conics, compensations, ray_ts, ray_planes, normals = (
+            proj_results
+        )
         opacities = torch.broadcast_to(
             opacities[..., None, :], batch_dims + (C, N)
         )  # [..., C, N]
         batch_ids, camera_ids, gaussian_ids = None, None, None
         image_ids = None
+
+    # Debug: print dimensions of ray_ts, ray_planes, normals
+    print(f"[Debug] ray_ts shape: {ray_ts.shape}")
+    print(f"[Debug] ray_ts range: [{float(ray_ts.min()):.6f}, {float(ray_ts.max()):.6f}]")
 
     if compensations is not None:
         opacities = opacities * compensations
@@ -700,22 +709,35 @@ def rasterization(
                     viewmats_rs=viewmats_rs,
                 )
             else:
-                render_colors_, render_alphas_ = rasterize_to_pixels(
+                (
+                    render_colors_,
+                    render_alphas_,
+                    expected_depths_,
+                    median_depths_,
+                    expected_normals_,
+                ) = rasterize_to_pixels(
                     means2d,
                     conics,
                     colors_chunk,
                     opacities,
+                    ray_ts,
+                    ray_planes,
+                    normals,
                     width,
                     height,
                     tile_size,
                     isect_offsets,
                     flatten_ids,
+                    Ks=Ks,
                     backgrounds=backgrounds_chunk,
                     packed=packed,
                     absgrad=absgrad,
                 )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
+            expected_depths = expected_depths_ / render_alphas_.clamp(min=1e-10)
+            median_depths = median_depths_
+            expected_normals = torch.nn.functional.normalize(expected_normals_, dim=-1)
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
     else:
@@ -743,20 +765,32 @@ def rasterization(
                 viewmats_rs=viewmats_rs,
             )
         else:
-            render_colors, render_alphas = rasterize_to_pixels(
+            (
+                render_colors,
+                render_alphas,
+                expected_depths,
+                median_depths,
+                expected_normals,
+            ) = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors,
                 opacities,
+                ray_ts,
+                ray_planes,
+                normals,
                 width,
                 height,
                 tile_size,
                 isect_offsets,
                 flatten_ids,
+                Ks=Ks,
                 backgrounds=backgrounds,
                 packed=packed,
                 absgrad=absgrad,
             )
+            expected_depths = expected_depths / render_alphas.clamp(min=1e-10)
+            expected_normals = torch.nn.functional.normalize(expected_normals, dim=-1)
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
@@ -767,7 +801,15 @@ def rasterization(
             dim=-1,
         )
 
-    return render_colors, render_alphas, meta
+    # return render_colors, render_alphas, meta
+    return (
+        render_colors,
+        render_alphas,
+        expected_depths,
+        median_depths,
+        expected_normals,
+        meta,
+    )
 
 
 def _rasterization(
