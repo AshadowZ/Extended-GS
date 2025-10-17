@@ -146,7 +146,7 @@ class Config:
     ### Scale regularization
     """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
     scale to be small"""
-    flat_reg: float = 0.0
+    flat_reg: float = 0.1
     """If scale regularization is enabled, a scale regularization introduced in PhysGauss
     (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians.
 
@@ -666,10 +666,14 @@ class Runner:
                 render_mode="RGB",
                 masks=masks,
             )
-            if renders.shape[-1] == 4:
+            if renders.shape[-1] == 7:
+                colors = renders[..., 0:3]
+                depths = renders[..., 3:4]
+                render_normal = renders[..., 4:7]
+            elif renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
             else:
-                colors, depths = renders, None
+                colors = renders
 
             if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
@@ -1128,6 +1132,7 @@ class Runner:
             "depth(accumulated)": "D",
             "depth(expected)": "ED",
             "alpha": "RGB",
+            "normal": "RGB+ED+N"
         }
 
         render_colors, render_alphas, info = self.rasterize_splats(
@@ -1156,6 +1161,8 @@ class Runner:
         elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
             # normalize depth to [0, 1]
             depth = render_colors[0, ..., 0:1]
+            # print("[Debug] depth range:", float(depth.min()), float(depth.max()))
+
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane
@@ -1178,6 +1185,13 @@ class Runner:
             renders = (
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )
+        elif render_tab_state.render_mode == "normal":
+            normals_t = render_colors[0, ..., 4:7]  # -> Tensor, shape [H, W, 3]
+            normals_t = (normals_t + 1) * 0.5 
+            normals_t = 1.0 - normals_t # 可视化更好看
+            # 保证范围并转为 numpy uint8
+            normals_t = normals_t.clamp(0.0, 1.0).detach().cpu().numpy()  # float in [0,1]
+            renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         return renders
 
     def compute_flat_loss(self) -> torch.Tensor:

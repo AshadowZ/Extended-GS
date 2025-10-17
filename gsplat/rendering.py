@@ -6,6 +6,7 @@ import torch.distributed
 import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
+from gsplat.utils import normalized_quat_to_rotmat
 
 from .cuda._wrapper import (
     RollingShutterType,
@@ -101,11 +102,13 @@ def rasterization(
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
+        The supported modes are "RGB", "D", "ED", "RGB+D", "RGB+ED", and "RGB+ED+N". "RGB" renders the
         colored image that respects the `colors` argument. "D" renders the accumulated z-depth
         :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
         :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
         the colored image and the depth, in which the depth is the last channel of the output.
+        "RGB+ED+N" renders color, expected depth, and normals, where the output channels are
+        [RGB, depth, normal_x, normal_y, normal_z].
 
     .. note::
         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
@@ -230,7 +233,7 @@ def rasterization(
         **render_colors**: The rendered colors. [..., C, height, width, X].
         X depends on the `render_mode` and input `colors`. If `render_mode` is "RGB",
         X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or
-        "RGB+ED", X is D+1.
+        "RGB+ED", X is D+1; if `render_mode` is "RGB+ED+N", X is D+4.
 
         **render_alphas**: The rendered alphas. [..., C, height, width, 1].
 
@@ -285,7 +288,7 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+ED+N"], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -435,6 +438,7 @@ def rasterization(
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         ) = proj_results
@@ -442,7 +446,7 @@ def rasterization(
         image_ids = batch_ids * C + camera_ids
     else:
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics, compensations = proj_results
+        radii, means2d, depths, normals, conics, compensations = proj_results
         opacities = torch.broadcast_to(
             opacities[..., None, :], batch_dims + (C, N)
         )  # [..., C, N]
@@ -611,7 +615,48 @@ def rasterization(
             colors = reshape_view(C, colors, N_world)
 
     # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
+    if render_mode == "RGB+ED+N":
+        # # 只适用于单场景单图像渲染
+        # if packed:
+        #     quats = quats.view(B, N, 4)[batch_ids, gaussian_ids]   # [nnz, 4]
+        #     scales = scales.view(B, N, 3)[batch_ids, gaussian_ids] # [nnz, 3]
+        #     means = means.view(B, N, 3)[batch_ids, gaussian_ids]   # [nnz, 3]
+
+        # # Normalize quaternion & get rotation matrix
+        # quats_crop = quats / quats.norm(dim=-1, keepdim=True) 
+        # rots = normalized_quat_to_rotmat(quats_crop)
+        # # Compute normal = min-scale axis
+        # min_idx = torch.argmin(scales, dim=-1)
+        # normals = rots[torch.arange(rots.shape[0]), :, min_idx]
+        # # Flip toward camera
+        # c2w = torch.inverse(viewmats)
+        # c2w_R = c2w[..., :3, :3]        
+        # c2w_t = c2w[..., :3, 3] 
+        # means = means[None, :, :].expand(C, -1, -1)
+        # viewdirs = c2w_t[:, None, :] - means.detach()
+        # viewdirs = viewdirs / (viewdirs.norm(dim=-1, keepdim=True) + 1e-8)
+        # normals = normals[None, :, :].expand(C, -1, -1).clone()
+        # dot = (normals * viewdirs).sum(-1, keepdim=True)
+        # flip = torch.where(dot < 0, -1.0, 1.0) # safe
+        # normals = normals * flip
+        # # Transform to camera space
+        # normals = normals @ c2w_R
+        # print(f"[Debug] depths shape:{depths.shape}")
+        # print(f"[Debug] normals shape:{normals.shape}")
+        # print(f"[Debug] colors shape:{colors.shape}")
+
+        extra_feats = torch.cat([depths[..., None], normals], dim=-1)
+        colors = torch.cat([colors, extra_feats], dim=-1)
+        # backgrounds
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds,
+                torch.zeros(batch_dims + (C, 1 + 3), device=backgrounds.device)],
+                dim=-1,
+            )
+            # print(f"[Debug] backgrounds shape:{backgrounds.shape}")
+        
+    elif render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
@@ -757,15 +802,19 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
             )
-    if render_mode in ["ED", "RGB+ED"]:
+    if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
         # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
+        if render_mode == "RGB+ED+N":
+            # 对于RGB+ED+N模式，深度通道是第4个通道（索引-4到-3）
+            render_colors[..., -4:-3] /= render_alphas.clamp_min(1e-10)
+        else:
+            render_colors = torch.cat(
+                [
+                    render_colors[..., :-1],
+                    render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+                ],
+                dim=-1,
+            )
 
     return render_colors, render_alphas, meta
 
