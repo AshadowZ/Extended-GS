@@ -62,6 +62,8 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
+        depth_dir_name: Optional[str] = None,
+        normal_dir_name: Optional[str] = None,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -216,7 +218,7 @@ class Parser:
         points_rgb = np.array([pt.rgb for pt in points3D.values()], dtype=np.uint8)
         point_indices = dict()
 
-        # 创建点ID到索引的快速映射，避免O(n)的线性搜索
+        # Create fast mapping from point ID to index to avoid O(n) linear search
         point_id_to_idx = {
             point_id: idx for idx, point_id in enumerate(points3D.keys())
         }
@@ -225,7 +227,7 @@ class Parser:
         for point_id, point_data in points3D.items():
             for image_id, _ in zip(point_data.image_ids, point_data.point2D_idxs):
                 image_name = image_id_to_name[image_id]
-                point_idx = point_id_to_idx[point_id]  # O(1)查找
+                point_idx = point_id_to_idx[point_id]  # O(1) lookup
                 point_indices.setdefault(image_name, []).append(point_idx)
         point_indices = {
             k: np.array(v).astype(np.int32) for k, v in point_indices.items()
@@ -366,6 +368,36 @@ class Parser:
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = np.max(dists)
 
+        # Process depth map paths (hardcoded .npy extension)
+        if depth_dir_name is None:
+            print("[Parser] No depth directory name provided. Skipping depth priors.")
+            self.depth_paths = None
+        else:
+            depth_dir = os.path.join(self.data_dir, depth_dir_name)
+            self.depth_paths = []
+            print(f"[Parser] Building depth paths from: {depth_dir} (ext: .npy)")     
+            # self.image_names is already a sorted list
+            for img_name in self.image_names:
+                base_name, _ = os.path.splitext(img_name)
+                # Hardcoded .npy extension
+                path = os.path.join(depth_dir, base_name + ".npy")
+                self.depth_paths.append(path)
+        
+        # Process normal map paths (hardcoded .png extension)
+        if normal_dir_name is None:
+            print("[Parser] No normal directory name provided. Skipping normal priors.")
+            self.normal_paths = None
+        else:
+            normal_dir = os.path.join(self.data_dir, normal_dir_name)
+            self.normal_paths = []
+            print(f"[Parser] Building normal paths from: {normal_dir} (ext: .png)")
+            # self.image_names is already a sorted list
+            for img_name in self.image_names:
+                base_name, _ = os.path.splitext(img_name)
+                # Hardcoded .png extension
+                path = os.path.join(normal_dir, base_name + ".png")
+                self.normal_paths.append(path)
+
 
 class Dataset:
     """A simple dataset class."""
@@ -375,10 +407,13 @@ class Dataset:
         parser: Parser,
         split: str = "train",
         patch_size: Optional[int] = None,
+        dn_reg_every_n: int = 1, # Apply supervision every N complete passes
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
+        self.dn_reg_every_n = dn_reg_every_n
+        self.current_epoch = 0
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
             self.indices = indices[indices % self.parser.test_every != 0]
@@ -387,6 +422,14 @@ class Dataset:
 
     def __len__(self):
         return len(self.indices)
+    
+    def increment_epoch(self):
+        """
+        Increment the internal epoch counter.
+        This should be called when the DataLoader iterator is reset.
+        """
+        self.current_epoch += 1
+        print(f"[Dataset] Epoch incremented to {self.current_epoch}. Regularization offset is now {self.current_epoch % self.dn_reg_every_n}")
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
@@ -396,6 +439,26 @@ class Dataset:
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id]
+
+        depth_data = None
+        normal_data = None
+
+        epoch_offset = self.current_epoch % self.dn_reg_every_n
+        use_dn_reg = (item % self.dn_reg_every_n) == epoch_offset
+
+        if self.parser.depth_paths is not None:
+            depth_path = self.parser.depth_paths[index]
+            try:
+                depth_data = np.load(depth_path) # Known to be .npy
+                if depth_data.ndim == 3: depth_data = depth_data[..., 0]
+            except Exception as e:
+                print(f"Warning: Could not load depth {depth_path}: {e}")
+        if self.parser.normal_paths is not None:
+            normal_path = self.parser.normal_paths[index]
+            try:
+                normal_data = imageio.imread(normal_path)[..., :3] # Known to be .png
+            except Exception as e:
+                print(f"Warning: Could not load normal {normal_path}: {e}")
 
         if len(params) > 0:
             # Images are distorted. Undistort them.
@@ -407,20 +470,53 @@ class Dataset:
             x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
 
+            # Apply to depth (Note: INTER_NEAREST)
+            if depth_data is not None:
+                depth_data = cv2.remap(depth_data, mapx, mapy, cv2.INTER_NEAREST)
+                depth_data = depth_data[y : y + h, x : x + w]
+            # Apply to normal
+            if normal_data is not None:
+                normal_data = cv2.remap(normal_data, mapx, mapy, cv2.INTER_LINEAR)
+                normal_data = normal_data[y : y + h, x : x + w]
+
         if self.patch_size is not None:
             # Random crop.
             h, w = image.shape[:2]
             x = np.random.randint(0, max(w - self.patch_size, 1))
             y = np.random.randint(0, max(h - self.patch_size, 1))
             image = image[y : y + self.patch_size, x : x + self.patch_size]
+
+            # Apply to depth (using same x, y)
+            if depth_data is not None:
+                depth_data = depth_data[y : y + self.patch_size, x : x + self.patch_size]
+            # Apply to normal (using same x, y)
+            if normal_data is not None:
+                normal_data = normal_data[y : y + self.patch_size, x : x + self.patch_size]
+            # Apply to mask (if exists)
+            if mask is not None:
+                mask = mask[y : y + self.patch_size, x : x + self.patch_size]
+
             K[0, 2] -= x
             K[1, 2] -= y
+
+        if depth_data is not None:
+            depth_prior = torch.from_numpy(depth_data).float().unsqueeze(0)
+        else:
+            depth_prior = torch.empty(0)
+        if normal_data is not None:
+            normal_prior = torch.from_numpy(normal_data.astype(np.float32) / 255.0 * 2.0 - 1.0)
+            normal_prior = normal_prior.permute(2, 0, 1)
+        else:
+            normal_prior = torch.empty(0)
 
         data = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
+            "depth_prior": depth_prior,
+            "normal_prior": normal_prior,
+            "use_dn_reg": torch.tensor(use_dn_reg)
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()

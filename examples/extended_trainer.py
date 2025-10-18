@@ -149,7 +149,6 @@ class Config:
     flat_reg: float = 0.1
     """If scale regularization is enabled, a scale regularization introduced in PhysGauss
     (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians.
-
     This implementation adapts the PhysGauss loss to use the ratio of max to median scale
     instead of max to min, as implemented in mvsanywhere/regsplatfacto. This modification
     has been found to work better at encouraging Gaussians to be disks.
@@ -157,9 +156,6 @@ class Config:
     scale_reg: float = 0.0
     """Threshold of ratio of Gaussian's max to median scale before applying regularization
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
-
-    The max-to-median ratio modification comes from mvsanywhere/regsplatfacto and has been
-    found to work better at encouraging disk-shaped Gaussians.
     """
     max_gauss_ratio: float = 6.0
 
@@ -361,6 +357,7 @@ class Runner:
             self.parser,
             split="train",
             patch_size=cfg.patch_size,
+            dn_reg_every_n=5
         )
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
@@ -630,6 +627,7 @@ class Runner:
             try:
                 data = next(trainloader_iter)
             except StopIteration:
+                trainloader.dataset.increment_epoch()
                 trainloader_iter = iter(trainloader)
                 data = next(trainloader_iter)
 

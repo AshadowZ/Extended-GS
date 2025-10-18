@@ -621,7 +621,6 @@ def rasterization(
         #     quats = quats.view(B, N, 4)[batch_ids, gaussian_ids]   # [nnz, 4]
         #     scales = scales.view(B, N, 3)[batch_ids, gaussian_ids] # [nnz, 3]
         #     means = means.view(B, N, 3)[batch_ids, gaussian_ids]   # [nnz, 3]
-
         # # Normalize quaternion & get rotation matrix
         # quats_crop = quats / quats.norm(dim=-1, keepdim=True) 
         # rots = normalized_quat_to_rotmat(quats_crop)
