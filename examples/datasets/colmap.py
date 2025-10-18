@@ -407,13 +407,10 @@ class Dataset:
         parser: Parser,
         split: str = "train",
         patch_size: Optional[int] = None,
-        dn_reg_every_n: int = 1, # Apply supervision every N complete passes
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
-        self.dn_reg_every_n = dn_reg_every_n
-        self.current_epoch = 0
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
             self.indices = indices[indices % self.parser.test_every != 0]
@@ -422,14 +419,6 @@ class Dataset:
 
     def __len__(self):
         return len(self.indices)
-    
-    def increment_epoch(self):
-        """
-        Increment the internal epoch counter.
-        This should be called when the DataLoader iterator is reset.
-        """
-        self.current_epoch += 1
-        print(f"[Dataset] Epoch incremented to {self.current_epoch}. Regularization offset is now {self.current_epoch % self.dn_reg_every_n}")
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
@@ -443,14 +432,10 @@ class Dataset:
         depth_data = None
         normal_data = None
 
-        epoch_offset = self.current_epoch % self.dn_reg_every_n
-        use_dn_reg = (item % self.dn_reg_every_n) == epoch_offset
-
         if self.parser.depth_paths is not None:
             depth_path = self.parser.depth_paths[index]
             try:
-                depth_data = np.load(depth_path) # Known to be .npy
-                if depth_data.ndim == 3: depth_data = depth_data[..., 0]
+                depth_data = np.load(depth_path).astype(np.float32) # Known to be .npy
             except Exception as e:
                 print(f"Warning: Could not load depth {depth_path}: {e}")
         if self.parser.normal_paths is not None:
@@ -503,8 +488,9 @@ class Dataset:
             depth_prior = torch.from_numpy(depth_data).float().unsqueeze(0)
         else:
             depth_prior = torch.empty(0)
-        if normal_data is not None:
-            normal_prior = torch.from_numpy(normal_data.astype(np.float32) / 255.0 * 2.0 - 1.0)
+        if normal_data is not None: # needs to be inverted, to opencv coord
+            normal_prior = torch.from_numpy(normal_data).float() / 255.0
+            normal_prior = 1.0 - normal_prior * 2.0
             normal_prior = normal_prior.permute(2, 0, 1)
         else:
             normal_prior = torch.empty(0)
@@ -516,7 +502,6 @@ class Dataset:
             "image_id": item,  # the index of the image in the dataset
             "depth_prior": depth_prior,
             "normal_prior": normal_prior,
-            "use_dn_reg": torch.tensor(use_dn_reg)
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()

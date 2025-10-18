@@ -158,6 +158,19 @@ class Config:
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
     """
     max_gauss_ratio: float = 6.0
+    
+    ### depth and normal regularization
+    """Specifies applying depth/normal regularization once every N iterations"""
+    dn_reg_every_n: int = 6
+    """If not None, the code will look for a folder named 'depth_dir_name' at the same level as
+    the 'images' directory, load the dense depth maps from it, and use their depth values 
+    for regularization.
+    """
+    depth_dir_name: Optional[str] = "pi3_depth"
+    """Weight of the depth loss"""
+    depth_loss_weight: float = 0.1
+    """Starting iteration for depth regularization"""
+    depth_loss_activation_step: int = 0
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -352,12 +365,12 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
+            depth_dir_name=cfg.depth_dir_name,
         )
         self.trainset = Dataset(
             self.parser,
             split="train",
             patch_size=cfg.patch_size,
-            dn_reg_every_n=5
         )
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
@@ -661,7 +674,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB",
+                render_mode="RGB+ED+N" if cfg.depth_dir_name is not None else "RGB",
                 masks=masks,
             )
             if renders.shape[-1] == 7:
