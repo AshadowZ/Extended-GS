@@ -107,6 +107,7 @@ class Parser:
 
             # Get distortion parameters.
             type_ = cam.model
+            # print(f"[Parser] camera type is {type_}")
             if type_ == "SIMPLE_PINHOLE":
                 params = np.empty(0, dtype=np.float32)
                 camtype = "perspective"
@@ -151,7 +152,7 @@ class Parser:
 
         # Check if any camera has distortion (non-PINHOLE models)
         has_distortion = any(
-            camtype != "PINHOLE" and camtype != "SIMPLE_PINHOLE"
+            camtype != "perspective"
             for camtype in camtype_dict.values()
         )
         if has_distortion:
@@ -235,7 +236,7 @@ class Parser:
 
         # Normalize the world space.
         if normalize:
-            T1 = similarity_from_cameras(camtoworlds)
+            T1, scale = similarity_from_cameras(camtoworlds, strict_scaling=True)
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)
 
@@ -263,6 +264,10 @@ class Parser:
                 transform = T3 @ transform
         else:
             transform = np.eye(4)
+            scale = 1.0
+        
+        self.scale = scale
+        print(f"[Parser] colmap.py scale: {self.scale}")
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
@@ -413,7 +418,8 @@ class Dataset:
         self.patch_size = patch_size
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
-            self.indices = indices[indices % self.parser.test_every != 0]
+            self.indices = indices
+            # self.indices = indices[indices % self.parser.test_every != 0]
         else:
             self.indices = indices[indices % self.parser.test_every == 0]
 
@@ -436,6 +442,7 @@ class Dataset:
             depth_path = self.parser.depth_paths[index]
             try:
                 depth_data = np.load(depth_path).astype(np.float32) # Known to be .npy
+                depth_data = depth_data * self.parser.scale
             except Exception as e:
                 print(f"Warning: Could not load depth {depth_path}: {e}")
         if self.parser.normal_paths is not None:
@@ -485,13 +492,12 @@ class Dataset:
             K[1, 2] -= y
 
         if depth_data is not None:
-            depth_prior = torch.from_numpy(depth_data).float().unsqueeze(0)
+            depth_prior = torch.from_numpy(depth_data).float().unsqueeze(-1)
         else:
             depth_prior = torch.empty(0)
         if normal_data is not None: # needs to be inverted, to opencv coord
             normal_prior = torch.from_numpy(normal_data).float() / 255.0
             normal_prior = 1.0 - normal_prior * 2.0
-            normal_prior = normal_prior.permute(2, 0, 1)
         else:
             normal_prior = torch.empty(0)
 
@@ -500,8 +506,8 @@ class Dataset:
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
-            "depth_prior": depth_prior,
-            "normal_prior": normal_prior,
+            "depth_prior": depth_prior, # [H, W, 1]
+            "normal_prior": normal_prior, # [H, W, 3]
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()

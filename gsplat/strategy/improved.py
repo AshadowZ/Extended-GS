@@ -37,6 +37,12 @@ class ImprovedStrategy(Strategy):
         prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
         grow_grad2d (float): GSs with image plane gradient above this value will be
           candidates for splitting. Default is 0.0002.
+        prune_scale3d (float): GSs with 3d scale (normalized by scene_scale) above this
+          value will be pruned. Default is 0.1.
+        prune_scale2d (float): GSs with 2d scale (normalized by image resolution) above
+          this value will be pruned. Default is 0.15.
+        refine_scale2d_stop_iter (int): Stop refining GSs based on 2d scale after this
+          iteration. Default is 0. Set to a positive value to enable this feature.
         refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
         refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
         reset_every (int): Reset opacities every this steps. Default is 3000.
@@ -67,6 +73,9 @@ class ImprovedStrategy(Strategy):
 
     prune_opa: float = 0.005
     grow_grad2d: float = 0.0003
+    prune_scale3d: float = 0.1
+    prune_scale2d: float = 0.15
+    refine_scale2d_stop_iter: int = 4000
     refine_start_iter: int = 500
     refine_stop_iter: int = 15_000
     reset_every: int = 3000
@@ -80,7 +89,7 @@ class ImprovedStrategy(Strategy):
         """Initialize instance variables after dataclass initialization."""
         self.reset_count = 0
 
-    def initialize_state(self) -> Dict[str, Any]:
+    def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
 
         The returned state should be passed to the `step_pre_backward()` and
@@ -90,7 +99,9 @@ class ImprovedStrategy(Strategy):
         # put them on the correct device.
         # - grad2d: running accum of the norm of the image plane gradients for each GS.
         # - count: running accum of how many time each GS is visible.
-        state = {"grad2d": None, "count": None}
+        state = {"grad2d": None, "count": None, "scene_scale": scene_scale}
+        if self.refine_scale2d_stop_iter > 0:
+            state["radii"] = None
         return state
 
     def check_sanity(
@@ -174,6 +185,8 @@ class ImprovedStrategy(Strategy):
             # reset running stats
             state["grad2d"].zero_()
             state["count"].zero_()
+            if self.refine_scale2d_stop_iter > 0:
+                state["radii"].zero_()
             torch.cuda.empty_cache()
 
         if step % self.reset_every == 0 and step > 0:
@@ -186,18 +199,18 @@ class ImprovedStrategy(Strategy):
             self.reset_count += 1
 
         # After the first two resets, perform quantile pruning 300 steps after reset
-        if self.reset_count <= 2 and step % self.reset_every == 300 and step > 300:
-            n_quantile_prune = self._quantile_prune_gs(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                percentile=0.2,
-            )
-            if self.verbose:
-                print(
-                    f"Step {step}: {n_quantile_prune} GSs pruned by quantile (20%). "
-                    f"Now having {len(params['means'])} GSs."
-                )
+        # if self.reset_count <= 2 and step % self.reset_every == 300 and step > 300:
+        #     n_quantile_prune = self._quantile_prune_gs(
+        #         params=params,
+        #         optimizers=optimizers,
+        #         state=state,
+        #         percentile=0.2,
+        #     )
+        #     if self.verbose:
+        #         print(
+        #             f"Step {step}: {n_quantile_prune} GSs pruned by quantile (20%). "
+        #             f"Now having {len(params['means'])} GSs."
+        #         )
 
     def _update_state(
         self,
@@ -231,20 +244,32 @@ class ImprovedStrategy(Strategy):
             state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
         if state["count"] is None:
             state["count"] = torch.zeros(n_gaussian, device=grads.device)
+        if self.refine_scale2d_stop_iter > 0 and state["radii"] is None:
+            assert "radii" in info, "radii is required but missing."
+            state["radii"] = torch.zeros(n_gaussian, device=grads.device)
 
         # update the running state
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
+            radii = info["radii"].max(dim=-1).values  # [nnz]
         else:
             # grads is [C, N, 2]
             sel = (info["radii"] > 0.0).all(dim=-1)  # [C, N]
             gs_ids = torch.where(sel)[1]  # [nnz]
             grads = grads[sel]  # [nnz, 2]
+            radii = info["radii"][sel].max(dim=-1).values  # [nnz]
         state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
         state["count"].index_add_(
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
         )
+        if self.refine_scale2d_stop_iter > 0:
+            # Should be ideally using scatter max
+            state["radii"][gs_ids] = torch.maximum(
+                state["radii"][gs_ids],
+                # normalize radii to [0, 1] screen space
+                radii / float(max(info["width"], info["height"])),
+            )
 
     @torch.no_grad()
     def _grow_gs(
@@ -319,6 +344,20 @@ class ImprovedStrategy(Strategy):
         step: int,
     ) -> int:
         is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
+        if step > self.reset_every:
+            is_too_big = (
+                torch.exp(params["scales"]).max(dim=-1).values
+                > self.prune_scale3d * state["scene_scale"]
+            )
+            # The official code also implements sreen-size pruning but
+            # it's actually not being used due to a bug:
+            # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
+            # We implement it here for completeness but set `refine_scale2d_stop_iter`
+            # to 0 by default to disable it.
+            if step < self.refine_scale2d_stop_iter:
+                is_too_big |= state["radii"] > self.prune_scale2d
+
+            is_prune = is_prune | is_too_big
 
         n_prune = is_prune.sum().item()
         if n_prune > 0:

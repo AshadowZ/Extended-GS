@@ -60,7 +60,7 @@ def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
     scale = 1.0 / scale_fn(np.linalg.norm(t + translate, axis=-1))
     transform[:3, :] *= scale
 
-    return transform
+    return transform, scale
 
 
 def align_principal_axes(point_cloud):
