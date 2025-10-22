@@ -114,28 +114,11 @@ class NormalGenerator(nn.Module):
 
         gradients_b32hw = kornia.filters.spatial_gradient(cam_points_b3hw)
 
-        return F.normalize(
-            torch.cross(
-                gradients_b32hw[:, :, 0],
-                gradients_b32hw[:, :, 1],
-                dim=1,
-            ),
+        # 反转方向以匹配OpenCV坐标定义
+        normal_b3hw = -torch.cross(
+            gradients_b32hw[:, :, 0],  # ∂P/∂x
+            gradients_b32hw[:, :, 1],  # ∂P/∂y
             dim=1,
         )
-
-
-def force_to_hw3(array: np.ndarray) -> np.ndarray:
-    """
-    Forces the array to have shape (height, width, 3), by expanding and repeating the last
-    channel if needed.
-    """
-    if array.ndim == 3 and array.shape[2] == 3:
-        return array
-    elif array.ndim == 3 and array.shape[2] == 1:
-        return np.repeat(array, 3, axis=2)
-    elif array.ndim == 2:
-        return np.repeat(array[:, :, None], 3, axis=2)
-    else:
-        raise ValueError(
-            f"Expected array to be (height, width, 3) or (height, width) but got {array.shape}"
-        )
+        normal_b3hw = F.normalize(normal_b3hw, dim=1)
+        return normal_b3hw

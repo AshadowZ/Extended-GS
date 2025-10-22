@@ -164,7 +164,7 @@ class Config:
     
     ### depth and normal regularization
     """Specifies applying depth regularization once every N iterations"""
-    depth_reg_every_n: int = 7
+    depth_reg_every_n: int = 4
     """If not None, the code will look for a folder named 'depth_dir_name' at the same level as
     the 'images' directory, load the dense depth maps from it, and use their depth values 
     for regularization.
@@ -176,7 +176,7 @@ class Config:
     depth_loss_activation_step: int = 1000
 
     """Specifies applying normal regularization once every N iterations"""
-    normal_reg_every_n: int = 7
+    normal_reg_every_n: int = 8
     """If not None, the code will look for a folder named 'normal_dir_name' at the same level as
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.
@@ -756,104 +756,24 @@ class Runner:
                 depth_loss = self.compute_depth_loss(depths, depths_prior)
                 loss += cfg.depth_loss_weight * depth_loss
 
-            ## 算法向量loss 
-            if step > cfg.surf_normal_loss_activation_step and cfg.surf_normal_loss_weight > 0.0 and step % 7 == 0:
-                # start_time = time.time()  # 开始计时
-
-                mvs_normal = data["normal_prior"].to(device).squeeze() # hw3
-                depths = depths.squeeze().unsqueeze(-1)
-                non_sky_pixels = torch.ones_like(depths).float()
-
-                # consistency_normal_loss = self.compute_normal_loss(surf_normals, render_normals, non_sky_pixels)
-                # 获得缩放前的相机内参
-                K_144 = torch.eye(4).unsqueeze(0).cuda()
-                K_144[:, :3, :3] = Ks
-                surf_normal = self.get_implied_normal_from_depth( # hw3
-                    depth_hw1=depths, invK_144=torch.inverse(K_144)
+            # normal loss
+            if (
+                cfg.normal_dir_name is not None
+                and step % cfg.normal_reg_every_n == 0
+                and (
+                    (cfg.surf_normal_loss_weight > 0 and step >= cfg.surf_normal_loss_activation_step)
+                    or (cfg.render_normal_loss_weight > 0 and step >= cfg.render_normal_loss_activation_step)
                 )
-                surf_normal = 1 - surf_normal
-                surf_normal = (surf_normal * 2.0) - 1.0
-                surf_normal_loss = self.compute_normal_loss(surf_normal, mvs_normal, non_sky_pixels)
-                loss += surf_normal_loss * cfg.surf_normal_loss_weight
-                
-                if step > cfg.render_normal_loss_activation_step and cfg.render_normal_loss_weight > 0:
-                    render_normal = render_normals
-                    render_normal_loss = self.compute_normal_loss(render_normal, mvs_normal, non_sky_pixels)
-                    loss += render_normal_loss * cfg.render_normal_loss_weight
+            ):
+                normals_prior = data["normal_prior"].to(device)  # [B,H,W,3]
+                mask = torch.ones_like(depths).float()        # [B,H,W,1]
 
-            
+                if cfg.surf_normal_loss_weight > 0 and step >= cfg.surf_normal_loss_activation_step:
+                    surf_normals = self.get_implied_normal_from_depth(depths, Ks)
+                    loss += cfg.surf_normal_loss_weight * self.compute_normal_loss(surf_normals, normals_prior, mask)
 
-            # # === normal-related losses ===
-            # if cfg.normal_dir_name is not None and step % cfg.normal_reg_every_n == 0:
-            #     # 检查哪些 loss 处于启用状态且已激活
-            #     enable_render_normal = (
-            #         cfg.render_normal_loss_weight > 0.0
-            #         and step >= cfg.render_normal_loss_activation_step
-            #     )
-            #     enable_surf_normal = (
-            #         cfg.surf_normal_loss_weight > 0.0
-            #         and step >= cfg.surf_normal_loss_activation_step
-            #     )
-            #     enable_consistency_normal = (
-            #         cfg.consistency_normal_loss_weight > 0.0
-            #         and step >= cfg.consistency_normal_loss_activation_step
-            #     )
-
-            #     # 如果都没启用，直接跳过
-            #     if not (enable_render_normal or enable_surf_normal or enable_consistency_normal):
-            #         pass
-            #     else:
-            #         # Initialize all potential variables to None
-            #         normals_prior = None
-            #         valid_normal_mask = None
-            #         surf_normals = None
-            #         valid_surf_normal_mask = None
-
-            #         # === Render normal loss ===
-            #         if enable_render_normal:
-            #             if normals_prior is None:
-            #                 normals_prior = data["normal_prior"].to(device)  # [C, H, W, 3]
-            #                 # The ground truth mask is based on the prior's non-zero vectors
-            #                 valid_normal_mask = torch.sum(normals_prior**2, dim=-1) > 1e-3
-            #             if valid_normal_mask.any():
-            #                 render_normal_cosine_sim = F.cosine_similarity(render_normals, normals_prior, dim=-1)
-            #                 render_normal_loss = (1.0 - render_normal_cosine_sim[valid_normal_mask]).mean()
-            #                 loss += cfg.render_normal_loss_weight * render_normal_loss
-
-            #         # === Surface normal loss ===
-            #         if enable_surf_normal:
-            #             if normals_prior is None:
-            #                 normals_prior = data["normal_prior"].to(device)
-            #                 valid_normal_mask = torch.sum(normals_prior**2, dim=-1) > 1e-3
-            #             # This loss requires both a valid prior and valid calculated surface normals
-            #             if valid_normal_mask.any():
-            #                 if surf_normals is None:
-            #                     # Calculate surface normals from depth
-            #                     surf_normals = depth_to_normal_cam(depths, Ks, False, use_kornia=True) # Recommended to use Kornia for dense normals
-            #                     # This mask identifies non-padded (valid) pixels from the calculation
-            #                     valid_surf_normal_mask = torch.sum(surf_normals**2, dim=-1) > 1e-3
-            #                 # The loss is only valid where BOTH the prior and the surface normal are valid.
-            #                 combined_mask = valid_normal_mask & valid_surf_normal_mask
-            #                 if combined_mask.any():
-            #                     surf_normal_cosine_sim = F.cosine_similarity(surf_normals, normals_prior, dim=-1)
-            #                     # Apply the combined mask to the loss calculation
-            #                     surf_normal_loss = (1.0 - surf_normal_cosine_sim[combined_mask]).mean()
-            #                     loss += cfg.surf_normal_loss_weight * surf_normal_loss
-
-            #         # === Normal consistency loss ===
-            #         if enable_consistency_normal:
-            #             if surf_normals is None:
-            #                 # Calculate surface normals if not already done
-            #                 surf_normals = depth_to_normal_cam(depths, Ks, False, use_kornia=True) # Recommended to use Kornia for dense normals
-            #                 # Create the validity mask for the calculated surface normals
-            #                 valid_surf_normal_mask = torch.sum(surf_normals**2, dim=-1) > 1e-3
-            #             # This loss is only valid where the surface normals are valid (non-padded).
-            #             # Rendered normals are assumed to be dense and valid everywhere.
-            #             if valid_surf_normal_mask.any():
-            #                 consistency_normal_cosine_sim = F.cosine_similarity(surf_normals, render_normals, dim=-1)
-            #                 # Apply the surface normal mask to the loss calculation
-            #                 consistency_normal_loss = (1.0 - consistency_normal_cosine_sim[valid_surf_normal_mask]).mean()
-            #                 loss += cfg.consistency_normal_loss_weight * consistency_normal_loss
+                if cfg.render_normal_loss_weight > 0 and step >= cfg.render_normal_loss_activation_step:
+                    loss += cfg.render_normal_loss_weight * self.compute_normal_loss(render_normals, normals_prior, mask)
                 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -987,16 +907,16 @@ class Runner:
                 else:
                     visibility_mask = (info["radii"] > 0).all(-1).any(0)
 
-            # optimize with gradient accumulation
-            # Implementation of gradient accumulation trick from:
-            # "Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering"
-            # https://arxiv.org/abs/2508.12313v1
             for optimizer in self.optimizers.values():
                 if cfg.visible_adam:
                     optimizer.step(visibility_mask)
                 else:
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+            # optimize with gradient accumulation
+            # Implementation of gradient accumulation trick from:
+            # "Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering"
+            # https://arxiv.org/abs/2508.12313v1
             # if step <= 15000:
             #     # Every step update for first 15000 iterations
             #     for optimizer in self.optimizers.values():
@@ -1338,17 +1258,17 @@ class Runner:
             )
         elif render_tab_state.render_mode == "render_normal":
             normals_t = render_colors[0, ..., 4:7]  # -> Tensor, shape [H, W, 3]
-            normals_t = (normals_t + 1) * 0.5 
-            normals_t = 1.0 - normals_t # 可视化更好看
-            # 保证范围并转为 numpy uint8
+            normals_t = (normals_t + 1) * 0.5
+            normals_t = 1.0 - normals_t # Better visualization
+            # Ensure range and convert to numpy uint8
             normals_t = normals_t.clamp(0.0, 1.0).detach().cpu().numpy()  # float in [0,1]
             renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         elif render_tab_state.render_mode == "surf_normal":
             depth = render_colors[0, ..., 0:1]
             normals_t = depth_to_normal_cam(depth, K, z_depth=False, use_kornia=True)
-            normals_t = (normals_t + 1) * 0.5 
-            normals_t = 1.0 - normals_t # 可视化更好看
-            # 保证范围并转为 numpy uint8
+            normals_t = (normals_t + 1) * 0.5
+            normals_t = 1.0 - normals_t # Better visualization
+            # Ensure range and convert to numpy uint8
             normals_t = normals_t.clamp(0.0, 1.0).detach().cpu().numpy()  # float in [0,1]
             renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         return renders
@@ -1357,14 +1277,15 @@ class Runner:
         self, pred_depth: torch.Tensor, gt_depth: torch.Tensor
     ) -> torch.Tensor:
         """
-        Computes the metric depth loss.
+        Computes the mean absolute depth loss between predicted and ground-truth depth maps,
+        supporting batched input.
 
         Args:
-            pred_depth (torch.Tensor): The predicted depth map.
-            gt_depth (torch.Tensor): The ground truth depth map.
+            pred_depth (torch.Tensor): Predicted depth maps of shape [B, H, W, 1] or [H, W, 1].
+            gt_depth (torch.Tensor): Ground-truth depth maps of shape [B, H, W, 1] or [H, W, 1].
 
         Returns:
-            torch.Tensor: The metric depth loss as a scalar.
+            torch.Tensor: A scalar tensor representing the averaged absolute depth loss across the batch.
         """
         valid_pix = gt_depth > 0.0
         if not valid_pix.any():
@@ -1373,68 +1294,106 @@ class Runner:
         diff = torch.where(valid_pix, pred_depth - gt_depth, 0)
         abs_diff = torch.abs(diff)
 
-        # 自动推断批次维度
+        # Automatically infer batch dimension
         if pred_depth.ndim == 4:  # [B,H,W,1]
             per_image_loss = abs_diff.sum(dim=(1,2,3)) / valid_pix.sum(dim=(1,2,3)).clamp(min=1)
             depth_loss = per_image_loss.mean()
-        else:  # 单张图 [H,W] or [H,W,1]
+        else:  # Single image [H,W] or [H,W,1]
             depth_loss = abs_diff.sum() / valid_pix.sum().clamp(min=1)
 
         return depth_loss
     
     def compute_normal_loss(
-        self, pred_normal_hw3: torch.Tensor, gt_normal_hw3: torch.Tensor, mask_hw1: torch.Tensor
+        self,
+        pred_normals_bhw3: torch.Tensor,
+        gt_normals_bhw3: torch.Tensor,
+        masks_bhw1: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Computes cosine loss between ground truth and predicted normals.
+        Computes the mean cosine similarity loss between predicted and ground-truth surface normals,
+        supporting batched input.
+
         Args:
-            pred_normal_hw3: Predicted normals, unit vectors (H,W,3).
-            gt_normal_hw3: Ground truth normals, unit vectors (H,W,3).
-            mask_hw1: Binary mask (H,W,1).
+            pred_normals_bhw3 (torch.Tensor): Predicted normal maps of shape [B, H, W, 3],
+                normalized to unit vectors.
+            gt_normals_bhw3 (torch.Tensor): Ground-truth normal maps of shape [B, H, W, 3],
+                normalized to unit vectors.
+            masks_bhw1 (torch.Tensor): Binary masks of shape [B, H, W, 1] indicating valid pixels.
+
         Returns:
-            Scalar tensor: normal loss.
+            torch.Tensor: A scalar tensor representing the averaged cosine loss across the batch.
         """
-        # 点积并 clamp 保证数值稳定
-        dot = (gt_normal_hw3 * pred_normal_hw3).sum(dim=-1).clamp(-1.0, 1.0)
+        # Ensure batch dimension exists (handles single-image input)
+        if pred_normals_bhw3.dim() == 3:
+            pred_normals_bhw3 = pred_normals_bhw3.unsqueeze(0)
+            gt_normals_bhw3 = gt_normals_bhw3.unsqueeze(0)
+            masks_bhw1 = masks_bhw1.unsqueeze(0)
 
-        # 只选择 mask 内的像素
-        masked_dot = dot.masked_select(mask_hw1.squeeze(-1).bool())
+        # Compute dot product between predicted and ground-truth normals
+        # Shape: [B, H, W]
+        dot = (gt_normals_bhw3 * pred_normals_bhw3).sum(dim=-1).clamp(-1.0, 1.0)
 
-        if masked_dot.numel() == 0:
-            return pred_normal_hw3.new_tensor(0.0)
+        # Remove channel dimension from mask → [B, H, W]
+        mask = masks_bhw1.squeeze(-1)
 
-        cosine_loss = 1 - masked_dot.mean()
-        return cosine_loss
+        # Avoid sparse access pattern from masked_select by zeroing invalid pixels
+        masked_dot = dot * mask  # Zero out invalid pixels (faster than masked_select)
+
+        # Count valid pixels per image; clamp to avoid division by zero
+        valid_counts = mask.sum(dim=(1, 2)).clamp(min=1)
+
+        # Compute per-image cosine loss: 1 - mean(cos(theta))
+        per_batch_loss = 1 - (masked_dot.sum(dim=(1, 2)) / valid_counts)
+
+        # Return mean loss across the batch
+        return per_batch_loss.mean()
 
     def get_implied_normal_from_depth(
-        self, depth_hw1: torch.Tensor, invK_144: torch.Tensor
+        self, depths_bhw1: torch.Tensor, Ks_b33: torch.Tensor
     ) -> torch.Tensor:
         """
-        Computes the normal map from a depth map.
+        Computes surface normal maps from a batch of depth maps using camera intrinsics.
 
         Args:
-            depth_hw1 (torch.Tensor): The depth map in HWC format.
-            invK_144 (torch.Tensor): The inverse intrinsics matrix.
+            depths_bhw1 (torch.Tensor): Depth maps of shape [B, H, W, 1] or [H, W, 1].
+            Ks_b33 (torch.Tensor): Camera intrinsics [B, 3, 3] or [3, 3].
 
         Returns:
-            torch.Tensor: The normal map in HWC format, scaled to [0, 1] range.
-                This matches the expected shape and format for visualisation in SplatFacto.
-                This needs to be rescaled to [-1, 1] when computing losses.
+            torch.Tensor: Normal maps of shape [B, H, W, 3], with values in [-1, 1].
         """
-        # Reshape depth to b1hw for normal generator
-        height, width = depth_hw1.shape[:2]
-        depth_11hw = depth_hw1.reshape(1, 1, height, width)
+        # Handle input dimensions and batch size
+        if depths_bhw1.dim() == 3:
+            # Single image case -> add batch dim
+            depths_bhw1 = depths_bhw1.unsqueeze(0)
+        elif depths_bhw1.dim() != 4:
+            raise ValueError(
+                f"depths_bhw1 must be [H, W, 1] or [B, H, W, 1], got {depths_bhw1.shape}"
+            )
 
-        # Estimate the normals from the depth map
-        normal_13hw = self.get_normal_generator(height=height, width=width)(depth_11hw, invK_144)
+        B, H, W, _ = depths_bhw1.shape
+        device = depths_bhw1.device
 
-        # Rescale normals from [-1, 1] to [0, 1]. See note in the docstring about the scaling.
-        normal_13hw = 0.5 * (1.0 + normal_13hw)
+        # Convert to [B, 1, H, W] for NormalGenerator
+        depths_b1hw = depths_bhw1.permute(0, 3, 1, 2)
 
-        # reshape to match HWC convention of splatfacto
-        normal_hw3 = normal_13hw.squeeze(0).permute(1, 2, 0)
+        # Prepare intrinsics K[3x3] → K[4x4] and invert
+        if Ks_b33.dim() == 2:
+            Ks_b33 = Ks_b33.unsqueeze(0).repeat(B, 1, 1)
+        elif Ks_b33.shape[0] != B:
+            raise ValueError(f"Batch size mismatch: depth batch={B}, K batch={Ks_b33.shape[0]}")
 
-        return normal_hw3
+        K_b44 = torch.eye(4, device=device).unsqueeze(0).repeat(B, 1, 1)
+        K_b44[:, :3, :3] = Ks_b33
+        invK_b44 = torch.inverse(K_b44)
+
+        # Compute normals with NormalGenerator
+        normal_generator = self.get_normal_generator(height=H, width=W)
+        normals_b3hw = normal_generator(depths_b1hw, invK_b44)  # [B, 3, H, W]
+
+        # Convert to [B, H, W, 3]
+        normals_bhw3 = normals_b3hw.permute(0, 2, 3, 1).contiguous()
+
+        return normals_bhw3
 
     @lru_cache(maxsize=None)
     def get_normal_generator(self, height: int, width: int) -> NormalGenerator:
