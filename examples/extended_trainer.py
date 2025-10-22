@@ -687,6 +687,30 @@ class Runner:
             # sh schedule
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
+            # Determine required render mode based on active regularizations
+            need_depth = (
+                cfg.depth_dir_name is not None
+                and cfg.depth_loss_weight > 0.0
+                and step >= cfg.depth_loss_activation_step
+                and step % cfg.depth_reg_every_n == 0
+            )
+            need_normal = (
+                cfg.normal_dir_name is not None
+                and (
+                    (cfg.surf_normal_loss_weight > 0 and step >= cfg.surf_normal_loss_activation_step)
+                    or (cfg.render_normal_loss_weight > 0 and step >= cfg.render_normal_loss_activation_step)
+                )
+                and step % cfg.normal_reg_every_n == 0
+            )
+
+            # Select render mode
+            if need_normal:
+                render_mode = "RGB+ED+N"
+            elif need_depth:
+                render_mode = "RGB+ED"
+            else:
+                render_mode = "RGB"
+
             # forward
             renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
@@ -697,17 +721,17 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED+N" if cfg.depth_dir_name is not None else "RGB",
+                render_mode=render_mode,
                 masks=masks,
             )
-            if renders.shape[-1] == 7:
-                colors = renders[..., 0:3]
-                depths = renders[..., 3:4]
-                render_normals = renders[..., 4:7]
-            elif renders.shape[-1] == 4:
-                colors, depths = renders[..., 0:3], renders[..., 3:4]
+
+            # Parse render outputs based on mode
+            if render_mode == "RGB+ED+N":
+                colors, depths, render_normals = renders[..., 0:3], renders[..., 3:4], renders[..., 4:7]
+            elif render_mode == "RGB+ED":
+                colors, depths, render_normals = renders[..., 0:3], renders[..., 3:4], None
             else:
-                colors = renders
+                colors, depths, render_normals = renders, None, None
 
             if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
@@ -746,34 +770,26 @@ class Runner:
                 loss += tvloss
 
             # depth loss
-            if (
-                cfg.depth_dir_name is not None
-                and cfg.depth_loss_weight > 0.0
-                and step >= cfg.depth_loss_activation_step
-                and step % cfg.depth_reg_every_n == 0
-            ):
-                depths_prior = data["depth_prior"].to(device) # [B,H,W,1]
+            if need_depth:
+                depths_prior = data["depth_prior"].to(device)    # [B,H,W,1]
                 depth_loss = self.compute_depth_loss(depths, depths_prior)
                 loss += cfg.depth_loss_weight * depth_loss
 
             # normal loss
-            if (
-                cfg.normal_dir_name is not None
-                and step % cfg.normal_reg_every_n == 0
-                and (
-                    (cfg.surf_normal_loss_weight > 0 and step >= cfg.surf_normal_loss_activation_step)
-                    or (cfg.render_normal_loss_weight > 0 and step >= cfg.render_normal_loss_activation_step)
-                )
-            ):
+            if need_normal:
                 normals_prior = data["normal_prior"].to(device)  # [B,H,W,3]
-                mask = torch.ones_like(depths).float()        # [B,H,W,1]
+                mask = torch.ones_like(depths).float()           # [B,H,W,1]
 
+                # Surface normal loss (from depth)
                 if cfg.surf_normal_loss_weight > 0 and step >= cfg.surf_normal_loss_activation_step:
                     surf_normals = self.get_implied_normal_from_depth(depths, Ks)
-                    loss += cfg.surf_normal_loss_weight * self.compute_normal_loss(surf_normals, normals_prior, mask)
+                    surf_normal_loss = self.compute_normal_loss(surf_normals, normals_prior, mask)
+                    loss += cfg.surf_normal_loss_weight * surf_normal_loss
 
+                # Rendered normal loss
                 if cfg.render_normal_loss_weight > 0 and step >= cfg.render_normal_loss_activation_step:
-                    loss += cfg.render_normal_loss_weight * self.compute_normal_loss(render_normals, normals_prior, mask)
+                    render_normal_loss = self.compute_normal_loss(render_normals, normals_prior, mask)
+                    loss += cfg.render_normal_loss_weight * render_normal_loss
                 
             # regularizations
             if cfg.opacity_reg > 0.0:
