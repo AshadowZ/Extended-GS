@@ -200,18 +200,18 @@ class ImprovedStrategy(Strategy):
 
         # After the first two resets, perform quantile pruning 300 steps after reset
         # 看起来似乎有没有这个机制区别不是很大？
-        if self.reset_count <= 2 and step % self.reset_every == 300 and step > 300:
-            n_quantile_prune = self._quantile_prune_gs(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                percentile=0.2,
-            )
-            if self.verbose:
-                print(
-                    f"Step {step}: {n_quantile_prune} GSs pruned by quantile (20%). "
-                    f"Now having {len(params['means'])} GSs."
-                )
+        # if self.reset_count <= 2 and step % self.reset_every == 300 and step > 300:
+        #     n_quantile_prune = self._quantile_prune_gs(
+        #         params=params,
+        #         optimizers=optimizers,
+        #         state=state,
+        #         percentile=0.2,
+        #     )
+        #     if self.verbose:
+        #         print(
+        #             f"Step {step}: {n_quantile_prune} GSs pruned by quantile (20%). "
+        #             f"Now having {len(params['means'])} GSs."
+        #         )
 
     def _update_state(
         self,

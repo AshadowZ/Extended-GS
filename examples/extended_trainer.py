@@ -172,7 +172,7 @@ class Config:
     """
     depth_dir_name: Optional[str] = "pi3_depth"  # "pi3_depth"
     """Weight of the depth loss"""
-    depth_loss_weight: float = 0.2
+    depth_loss_weight: float = 0.3
     """Starting iteration for depth regularization"""
     depth_loss_activation_step: int = 1000
 
@@ -190,7 +190,7 @@ class Config:
     """Weight of the surf_normal_loss"""
     surf_normal_loss_weight: float = 0.1
     """Starting iteration for surf_normal regularization"""
-    surf_normal_loss_activation_step: int = 1000
+    surf_normal_loss_activation_step: int = 7000
     """Weight of the consistency_normal_loss"""
     consistency_normal_loss_weight: float = 0.0
     """Starting iteration for normal consistency regularization"""
