@@ -44,6 +44,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_fused_fwd(
     const at::Tensor means,                   // [..., N, 3]
@@ -82,6 +83,7 @@ projection_ewa_3dgs_fused_bwd(
     // grad outputs
     const at::Tensor v_means2d,                     // [..., C, N, 2]
     const at::Tensor v_depths,                      // [..., C, N]
+    const at::Tensor v_normals,                     // [..., C, N, 3]
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad
@@ -96,6 +98,7 @@ projection_ewa_3dgs_fused_bwd(
 // sparsity is high, i.e., most of the gaussians are not in the camera frustum.
 // But at the cost of slightly slower speed.
 std::tuple<
+    at::Tensor,
     at::Tensor,
     at::Tensor,
     at::Tensor,
@@ -144,6 +147,7 @@ projection_ewa_3dgs_packed_bwd(
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
+    const at::Tensor v_normals,                     // [nnz, 3]
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,

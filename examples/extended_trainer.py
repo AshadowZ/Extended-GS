@@ -36,8 +36,12 @@ from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy, ImprovedStrategy
+from gsplat.utils import depth_to_normal_cam
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
+
+from functools import lru_cache
+from utils_depth import NormalGenerator
 
 
 @dataclass
@@ -79,15 +83,15 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [30_000])
     # Whether to save ply file (storage size can be large)
-    save_ply: bool = False
+    save_ply: bool = True
     # Steps to save the model as ply
-    ply_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    ply_steps: List[int] = field(default_factory=lambda: [30_000])
     # Whether to disable video generation during training and evaluation
-    disable_video: bool = False
+    disable_video: bool = True
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -96,7 +100,7 @@ class Config:
     # Initial extent of GSs as a multiple of the camera extent. Ignored if using sfm
     init_extent: float = 3.0
     # Degree of spherical harmonics
-    sh_degree: int = 3
+    sh_degree: int = 1
     # Turn on another SH degree every this steps
     sh_degree_interval: int = 1000
     # Initial opacity of GS
@@ -125,7 +129,7 @@ class Config:
     antialiased: bool = False
 
     # Use random background for training to discourage transparency
-    random_bkgd: bool = False
+    random_bkgd: bool = True
 
     # LR for 3D point positions
     means_lr: float = 4e-5
@@ -146,22 +150,51 @@ class Config:
     ### Scale regularization
     """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
     scale to be small"""
-    flat_reg: float = 0.0
+    flat_reg: float = 1.0
     """If scale regularization is enabled, a scale regularization introduced in PhysGauss
     (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians.
-
     This implementation adapts the PhysGauss loss to use the ratio of max to median scale
     instead of max to min, as implemented in mvsanywhere/regsplatfacto. This modification
     has been found to work better at encouraging Gaussians to be disks.
     """
-    scale_reg: float = 0.0
+    scale_reg: float = 0.1
     """Threshold of ratio of Gaussian's max to median scale before applying regularization
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
-
-    The max-to-median ratio modification comes from mvsanywhere/regsplatfacto and has been
-    found to work better at encouraging disk-shaped Gaussians.
     """
     max_gauss_ratio: float = 6.0
+
+    ### depth and normal regularization
+    """Specifies applying depth regularization once every N iterations"""
+    depth_reg_every_n: int = 4
+    """If not None, the code will look for a folder named 'depth_dir_name' at the same level as
+    the 'images' directory, load the dense depth maps from it, and use their depth values 
+    for regularization.
+    """
+    depth_dir_name: Optional[str] = "pi3_depth"  # "pi3_depth"
+    """Weight of the depth loss"""
+    depth_loss_weight: float = 0.3
+    """Starting iteration for depth regularization"""
+    depth_loss_activation_step: int = 1000
+
+    """Specifies applying normal regularization once every N iterations"""
+    normal_reg_every_n: int = 8
+    """If not None, the code will look for a folder named 'normal_dir_name' at the same level as
+    the 'images' directory, load the dense normal maps from it, and use their normal values 
+    for regularization.
+    """
+    normal_dir_name: Optional[str] = "moge_normal"  # "moge_normal"
+    """Weight of the render_normal_loss"""
+    render_normal_loss_weight: float = 0.1
+    """Starting iteration for render_normal regularization"""
+    render_normal_loss_activation_step: int = 7000
+    """Weight of the surf_normal_loss"""
+    surf_normal_loss_weight: float = 0.1
+    """Starting iteration for surf_normal regularization"""
+    surf_normal_loss_activation_step: int = 7000
+    """Weight of the consistency_normal_loss"""
+    consistency_normal_loss_weight: float = 0.0
+    """Starting iteration for normal consistency regularization"""
+    consistency_normal_loss_activation_step: int = 7000
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -182,11 +215,9 @@ class Config:
     app_opt_reg: float = 1e-6
 
     # Enable bilateral grid. (experimental)
-    use_bilateral_grid: bool = False
+    use_bilateral_grid: bool = True
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
-
-    # Depth loss removed - sparse depth supervision not needed
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -200,7 +231,7 @@ class Config:
     with_eval3d: bool = False
 
     # Whether use fused-bilateral grid
-    use_fused_bilagrid: bool = False
+    use_fused_bilagrid: bool = True
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -356,6 +387,8 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
+            depth_dir_name=cfg.depth_dir_name,
+            normal_dir_name=cfg.normal_dir_name,
         )
         self.trainset = Dataset(
             self.parser,
@@ -403,7 +436,9 @@ class Runner:
         elif isinstance(self.cfg.strategy, MCMCStrategy):
             self.strategy_state = self.cfg.strategy.initialize_state()
         elif isinstance(self.cfg.strategy, ImprovedStrategy):
-            self.strategy_state = self.cfg.strategy.initialize_state()
+            self.strategy_state = self.cfg.strategy.initialize_state(
+                scene_scale=self.scene_scale
+            )
         else:
             assert_never(self.cfg.strategy)
 
@@ -611,7 +646,7 @@ class Runner:
             self.trainset,
             batch_size=cfg.batch_size,
             shuffle=True,
-            num_workers=4,
+            num_workers=8,
             persistent_workers=True,
             pin_memory=True,
         )
@@ -653,6 +688,36 @@ class Runner:
             # sh schedule
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
+            # Determine required render mode based on active regularizations
+            need_depth = (
+                cfg.depth_dir_name is not None
+                and cfg.depth_loss_weight > 0.0
+                and step >= cfg.depth_loss_activation_step
+                and step % cfg.depth_reg_every_n == 0
+            )
+            need_normal = (
+                cfg.normal_dir_name is not None
+                and (
+                    (
+                        cfg.surf_normal_loss_weight > 0
+                        and step >= cfg.surf_normal_loss_activation_step
+                    )
+                    or (
+                        cfg.render_normal_loss_weight > 0
+                        and step >= cfg.render_normal_loss_activation_step
+                    )
+                )
+                and step % cfg.normal_reg_every_n == 0
+            )
+
+            # Select render mode
+            if need_normal:
+                render_mode = "RGB+ED+N"
+            elif need_depth:
+                render_mode = "RGB+ED"
+            else:
+                render_mode = "RGB"
+
             # forward
             renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
@@ -663,13 +728,25 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB",
+                render_mode=render_mode,
                 masks=masks,
             )
-            if renders.shape[-1] == 4:
-                colors, depths = renders[..., 0:3], renders[..., 3:4]
+
+            # Parse render outputs based on mode
+            if render_mode == "RGB+ED+N":
+                colors, depths, render_normals = (
+                    renders[..., 0:3],
+                    renders[..., 3:4],
+                    renders[..., 4:7],
+                )
+            elif render_mode == "RGB+ED":
+                colors, depths, render_normals = (
+                    renders[..., 0:3],
+                    renders[..., 3:4],
+                    None,
+                )
             else:
-                colors, depths = renders, None
+                colors, depths, render_normals = renders, None, None
 
             if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
@@ -706,6 +783,38 @@ class Runner:
             if cfg.use_bilateral_grid:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
+
+            # depth loss
+            if need_depth:
+                depths_prior = data["depth_prior"].to(device)  # [B,H,W,1]
+                depth_loss = self.compute_depth_loss(depths, depths_prior)
+                loss += cfg.depth_loss_weight * depth_loss
+
+            # normal loss
+            if need_normal:
+                normals_prior = data["normal_prior"].to(device)  # [B,H,W,3]
+                mask = torch.ones_like(depths).float()  # [B,H,W,1]
+
+                # Surface normal loss (from depth)
+                if (
+                    cfg.surf_normal_loss_weight > 0
+                    and step >= cfg.surf_normal_loss_activation_step
+                ):
+                    surf_normals = self.get_implied_normal_from_depth(depths, Ks)
+                    surf_normal_loss = self.compute_normal_loss(
+                        surf_normals, normals_prior, mask
+                    )
+                    loss += cfg.surf_normal_loss_weight * surf_normal_loss
+
+                # Rendered normal loss
+                if (
+                    cfg.render_normal_loss_weight > 0
+                    and step >= cfg.render_normal_loss_activation_step
+                ):
+                    render_normal_loss = self.compute_normal_loss(
+                        render_normals, normals_prior, mask
+                    )
+                    loss += cfg.render_normal_loss_weight * render_normal_loss
 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -839,36 +948,42 @@ class Runner:
                 else:
                     visibility_mask = (info["radii"] > 0).all(-1).any(0)
 
+            for optimizer in self.optimizers.values():
+                if cfg.visible_adam:
+                    optimizer.step(visibility_mask)
+                else:
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
             # optimize with gradient accumulation
             # Implementation of gradient accumulation trick from:
             # "Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering"
             # https://arxiv.org/abs/2508.12313v1
-            if step <= 15000:
-                # Every step update for first 15000 iterations
-                for optimizer in self.optimizers.values():
-                    if cfg.visible_adam:
-                        optimizer.step(visibility_mask)
-                    else:
-                        optimizer.step()
-                    optimizer.zero_grad(set_to_none=True)
-            elif step <= 22500:
-                # Accumulate 5 steps, update every 5 steps for 15000-22500 iterations
-                if step % 5 == 0:
-                    for optimizer in self.optimizers.values():
-                        if cfg.visible_adam:
-                            optimizer.step(visibility_mask)
-                        else:
-                            optimizer.step()
-                        optimizer.zero_grad(set_to_none=True)
-            else:
-                # Accumulate 20 steps, update every 20 steps after 22500 iterations
-                if step % 20 == 0:
-                    for optimizer in self.optimizers.values():
-                        if cfg.visible_adam:
-                            optimizer.step(visibility_mask)
-                        else:
-                            optimizer.step()
-                        optimizer.zero_grad(set_to_none=True)
+            # if step <= 15000:
+            #     # Every step update for first 15000 iterations
+            #     for optimizer in self.optimizers.values():
+            #         if cfg.visible_adam:
+            #             optimizer.step(visibility_mask)
+            #         else:
+            #             optimizer.step()
+            #         optimizer.zero_grad(set_to_none=True)
+            # elif step <= 22500:
+            #     # Accumulate 5 steps, update every 5 steps for 15000-22500 iterations
+            #     if step % 5 == 0:
+            #         for optimizer in self.optimizers.values():
+            #             if cfg.visible_adam:
+            #                 optimizer.step(visibility_mask)
+            #             else:
+            #                 optimizer.step()
+            #             optimizer.zero_grad(set_to_none=True)
+            # else:
+            #     # Accumulate 20 steps, update every 20 steps after 22500 iterations
+            #     if step % 20 == 0:
+            #         for optimizer in self.optimizers.values():
+            #             if cfg.visible_adam:
+            #                 optimizer.step(visibility_mask)
+            #             else:
+            #                 optimizer.step()
+            #             optimizer.zero_grad(set_to_none=True)
             for optimizer in self.pose_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -1128,6 +1243,8 @@ class Runner:
             "depth(accumulated)": "D",
             "depth(expected)": "ED",
             "alpha": "RGB",
+            "render_normal": "RGB+ED+N",
+            "surf_normal": "ED",
         }
 
         render_colors, render_alphas, info = self.rasterize_splats(
@@ -1156,6 +1273,8 @@ class Runner:
         elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
             # normalize depth to [0, 1]
             depth = render_colors[0, ..., 0:1]
+            # print("[Debug] depth range:", float(depth.min()), float(depth.max()))
+
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane
@@ -1178,7 +1297,169 @@ class Runner:
             renders = (
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )
+        elif render_tab_state.render_mode == "render_normal":
+            normals_t = render_colors[0, ..., 4:7]  # -> Tensor, shape [H, W, 3]
+            normals_t = (normals_t + 1) * 0.5
+            normals_t = 1.0 - normals_t  # Better visualization
+            # Ensure range and convert to numpy uint8
+            normals_t = (
+                normals_t.clamp(0.0, 1.0).detach().cpu().numpy()
+            )  # float in [0,1]
+            renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
+        elif render_tab_state.render_mode == "surf_normal":
+            depth = render_colors[0, ..., 0:1]
+            normals_t = depth_to_normal_cam(depth, K, z_depth=False, use_kornia=True)
+            normals_t = (normals_t + 1) * 0.5
+            normals_t = 1.0 - normals_t  # Better visualization
+            # Ensure range and convert to numpy uint8
+            normals_t = (
+                normals_t.clamp(0.0, 1.0).detach().cpu().numpy()
+            )  # float in [0,1]
+            renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         return renders
+
+    def compute_depth_loss(
+        self, pred_depth: torch.Tensor, gt_depth: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Computes the mean absolute depth loss between predicted and ground-truth depth maps,
+        supporting batched input.
+
+        Args:
+            pred_depth (torch.Tensor): Predicted depth maps of shape [B, H, W, 1] or [H, W, 1].
+            gt_depth (torch.Tensor): Ground-truth depth maps of shape [B, H, W, 1] or [H, W, 1].
+
+        Returns:
+            torch.Tensor: A scalar tensor representing the averaged absolute depth loss across the batch.
+        """
+        valid_pix = gt_depth > 0.0
+        if not valid_pix.any():
+            return torch.tensor(0.0, device=pred_depth.device)
+
+        diff = torch.where(valid_pix, pred_depth - gt_depth, 0)
+        abs_diff = torch.abs(diff)
+
+        # Automatically infer batch dimension
+        if pred_depth.ndim == 4:  # [B,H,W,1]
+            per_image_loss = abs_diff.sum(dim=(1, 2, 3)) / valid_pix.sum(
+                dim=(1, 2, 3)
+            ).clamp(min=1)
+            depth_loss = per_image_loss.mean()
+        else:  # Single image [H,W] or [H,W,1]
+            depth_loss = abs_diff.sum() / valid_pix.sum().clamp(min=1)
+
+        return depth_loss
+
+    def compute_normal_loss(
+        self,
+        pred_normals_bhw3: torch.Tensor,
+        gt_normals_bhw3: torch.Tensor,
+        masks_bhw1: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Computes the mean cosine similarity loss between predicted and ground-truth surface normals,
+        supporting batched input.
+
+        Args:
+            pred_normals_bhw3 (torch.Tensor): Predicted normal maps of shape [B, H, W, 3],
+                normalized to unit vectors.
+            gt_normals_bhw3 (torch.Tensor): Ground-truth normal maps of shape [B, H, W, 3],
+                normalized to unit vectors.
+            masks_bhw1 (torch.Tensor): Binary masks of shape [B, H, W, 1] indicating valid pixels.
+
+        Returns:
+            torch.Tensor: A scalar tensor representing the averaged cosine loss across the batch.
+        """
+        # Ensure batch dimension exists (handles single-image input)
+        if pred_normals_bhw3.dim() == 3:
+            pred_normals_bhw3 = pred_normals_bhw3.unsqueeze(0)
+            gt_normals_bhw3 = gt_normals_bhw3.unsqueeze(0)
+            masks_bhw1 = masks_bhw1.unsqueeze(0)
+
+        # Compute dot product between predicted and ground-truth normals
+        # Shape: [B, H, W]
+        dot = (gt_normals_bhw3 * pred_normals_bhw3).sum(dim=-1).clamp(-1.0, 1.0)
+
+        # Remove channel dimension from mask → [B, H, W]
+        mask = masks_bhw1.squeeze(-1)
+
+        # Avoid sparse access pattern from masked_select by zeroing invalid pixels
+        masked_dot = dot * mask  # Zero out invalid pixels (faster than masked_select)
+
+        # Count valid pixels per image; clamp to avoid division by zero
+        valid_counts = mask.sum(dim=(1, 2)).clamp(min=1)
+
+        # Compute per-image cosine loss: 1 - mean(cos(theta))
+        per_batch_loss = 1 - (masked_dot.sum(dim=(1, 2)) / valid_counts)
+
+        # Return mean loss across the batch
+        return per_batch_loss.mean()
+
+    def get_implied_normal_from_depth(
+        self, depths_bhw1: torch.Tensor, Ks_b33: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Computes surface normal maps from a batch of depth maps using camera intrinsics.
+
+        Args:
+            depths_bhw1 (torch.Tensor): Depth maps of shape [B, H, W, 1] or [H, W, 1].
+            Ks_b33 (torch.Tensor): Camera intrinsics [B, 3, 3] or [3, 3].
+
+        Returns:
+            torch.Tensor: Normal maps of shape [B, H, W, 3], with values in [-1, 1].
+        """
+        # Handle input dimensions and batch size
+        if depths_bhw1.dim() == 3:
+            # Single image case -> add batch dim
+            depths_bhw1 = depths_bhw1.unsqueeze(0)
+        elif depths_bhw1.dim() != 4:
+            raise ValueError(
+                f"depths_bhw1 must be [H, W, 1] or [B, H, W, 1], got {depths_bhw1.shape}"
+            )
+
+        B, H, W, _ = depths_bhw1.shape
+        device = depths_bhw1.device
+
+        # Convert to [B, 1, H, W] for NormalGenerator
+        depths_b1hw = depths_bhw1.permute(0, 3, 1, 2)
+
+        # Prepare intrinsics K[3x3] → K[4x4] and invert
+        if Ks_b33.dim() == 2:
+            Ks_b33 = Ks_b33.unsqueeze(0).repeat(B, 1, 1)
+        elif Ks_b33.shape[0] != B:
+            raise ValueError(
+                f"Batch size mismatch: depth batch={B}, K batch={Ks_b33.shape[0]}"
+            )
+
+        K_b44 = torch.eye(4, device=device).unsqueeze(0).repeat(B, 1, 1)
+        K_b44[:, :3, :3] = Ks_b33
+        invK_b44 = torch.inverse(K_b44)
+
+        # Compute normals with NormalGenerator
+        normal_generator = self.get_normal_generator(height=H, width=W)
+        normals_b3hw = normal_generator(depths_b1hw, invK_b44)  # [B, 3, H, W]
+
+        # Convert to [B, H, W, 3]
+        normals_bhw3 = normals_b3hw.permute(0, 2, 3, 1).contiguous()
+
+        return normals_bhw3
+
+    @lru_cache(maxsize=None)
+    def get_normal_generator(self, height: int, width: int) -> NormalGenerator:
+        """
+        Gets a normal generator object.
+
+        This is wrapped in lru_cache so for a given height and width, we only create one instance
+        of the normal generator during the whole lifetime of this class instance.
+
+        Args:
+            height (int): The height of the depth map.
+            width (int): The width of the depth map.
+
+        Returns:
+            NormalGenerator: The normal generator object.
+        """
+        return NormalGenerator(height=height, width=width).cuda()
 
     def compute_flat_loss(self) -> torch.Tensor:
         """
@@ -1302,13 +1583,16 @@ if __name__ == "__main__":
                 strategy=ImprovedStrategy(
                     prune_opa=0.005,
                     grow_grad2d=0.0002,
+                    prune_scale3d=0.1,
+                    prune_scale2d=0.15,
+                    refine_scale2d_stop_iter=4000,
                     refine_start_iter=500,
-                    refine_stop_iter=15_000,
+                    refine_stop_iter=20000,
                     reset_every=3000,
                     refine_every=100,
                     absgrad=True,
                     verbose=True,
-                    budget=2000000,
+                    budget=3000000,
                 ),
             ),
         ),
