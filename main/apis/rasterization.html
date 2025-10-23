@@ -380,11 +380,13 @@ activated bases in the SH coefficients.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><strong>Depth Rendering</strong>: This function supports colors or/and depths via <cite>render_mode</cite>.
-The supported modes are “RGB”, “D”, “ED”, “RGB+D”, and “RGB+ED”. “RGB” renders the
+The supported modes are “RGB”, “D”, “ED”, “RGB+D”, “RGB+ED”, and “RGB+ED+N”. “RGB” renders the
 colored image that respects the <cite>colors</cite> argument. “D” renders the accumulated z-depth
 <span class="math notranslate nohighlight">\(\sum_i w_i z_i\)</span>. “ED” renders the expected z-depth
 <span class="math notranslate nohighlight">\(\frac{\sum_i w_i z_i}{\sum_i w_i}\)</span>. “RGB+D” and “RGB+ED” render both
-the colored image and the depth, in which the depth is the last channel of the output.</p>
+the colored image and the depth, in which the depth is the last channel of the output.
+“RGB+ED+N” renders color, expected depth, and normals, where the output channels are
+[RGB, depth, normal_x, normal_y, normal_z].</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
@@ -516,7 +518,7 @@ global shutter.</p></li>
 <dd class="field-even"><p><p><strong>render_colors</strong>: The rendered colors. […, C, height, width, X].
 X depends on the <cite>render_mode</cite> and input <cite>colors</cite>. If <cite>render_mode</cite> is “RGB”,
 X is D; if <cite>render_mode</cite> is “D” or “ED”, X is 1; if <cite>render_mode</cite> is “RGB+D” or
-“RGB+ED”, X is D+1.</p>
+“RGB+ED”, X is D+1; if <cite>render_mode</cite> is “RGB+ED+N”, X is D+4.</p>
 <p><strong>render_alphas</strong>: The rendered alphas. […, C, height, width, 1].</p>
 <p><strong>meta</strong>: A dictionary of intermediate results of the rasterization.</p>
 </p>

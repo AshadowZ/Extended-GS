@@ -921,7 +921,9 @@
         <span class="k">assert</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">channels</span><span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">channels</span><span class="p">,),</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">image_dims</span> <span class="ow">or</span> <span class="p">(</span><span class="mi">1</span><span class="p">,))</span> <span class="o">+</span> <span class="p">(</span>
+            <span class="n">channels</span><span class="p">,</span>
+        <span class="p">),</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span>
         <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">assert</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span>
@@ -1388,7 +1390,7 @@
         <span class="p">)</span>
 
         <span class="c1"># &quot;covars&quot; and {&quot;quats&quot;, &quot;scales&quot;} are mutually exclusive</span>
-        <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+        <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">normals</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
             <span class="s2">&quot;projection_ewa_3dgs_fused_fwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
@@ -1417,10 +1419,12 @@
         <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span> <span class="o">=</span> <span class="n">eps2d</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
 
-        <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
+        <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">normals</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_conics</span><span class="p">,</span> <span class="n">v_compensations</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
+        <span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_normals</span><span class="p">,</span> <span class="n">v_conics</span><span class="p">,</span> <span class="n">v_compensations</span>
+    <span class="p">):</span>
         <span class="p">(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
@@ -1456,6 +1460,7 @@
             <span class="n">compensations</span><span class="p">,</span>
             <span class="n">v_means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_depths</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">v_normals</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_compensations</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span>  <span class="c1"># viewmats_requires_grad</span>
@@ -1947,6 +1952,7 @@
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">depths</span><span class="p">,</span>
+            <span class="n">normals</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">compensations</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_ewa_3dgs_packed_fwd&quot;</span><span class="p">)(</span>
@@ -1994,6 +2000,7 @@
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">depths</span><span class="p">,</span>
+            <span class="n">normals</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">compensations</span><span class="p">,</span>
         <span class="p">)</span>
@@ -2007,6 +2014,7 @@
         <span class="n">v_radii</span><span class="p">,</span>
         <span class="n">v_means2d</span><span class="p">,</span>
         <span class="n">v_depths</span><span class="p">,</span>
+        <span class="n">v_normals</span><span class="p">,</span>
         <span class="n">v_conics</span><span class="p">,</span>
         <span class="n">v_compensations</span><span class="p">,</span>
     <span class="p">):</span>
@@ -2051,6 +2059,7 @@
             <span class="n">compensations</span><span class="p">,</span>
             <span class="n">v_means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_depths</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">v_normals</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_compensations</span><span class="p">,</span>
             <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span>  <span class="c1"># viewmats_requires_grad</span>
@@ -2618,7 +2627,9 @@
         <span class="k">assert</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="n">image_dims</span><span class="p">,</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">assert</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">image_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">channels</span><span class="p">,),</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">image_dims</span> <span class="ow">or</span> <span class="p">(</span><span class="mi">1</span><span class="p">,))</span> <span class="o">+</span> <span class="p">(</span>
+            <span class="n">channels</span><span class="p">,</span>
+        <span class="p">),</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span>
         <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
     <span class="c1"># Pad the channels to the nearest supported number if necessary</span>
