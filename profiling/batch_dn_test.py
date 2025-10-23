@@ -19,11 +19,14 @@ from gsplat.rendering import rasterization
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
+
 def test_rasterization_batch():
     """Test rasterization with batch processing for RGB+ED+N mode."""
 
     # Load test data from assets/test_garden.npz
-    data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets/test_garden.npz")
+    data_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "assets/test_garden.npz"
+    )
     (
         means,
         quats,
@@ -124,9 +127,13 @@ def test_rasterization_batch():
         actual_channels = render_colors.shape[-1]
 
         if actual_channels == expected_channels:
-            print(f"✅ Output channels correct: {actual_channels} (expected: {expected_channels})")
+            print(
+                f"✅ Output channels correct: {actual_channels} (expected: {expected_channels})"
+            )
         else:
-            print(f"❌ Output channels incorrect: {actual_channels} (expected: {expected_channels})")
+            print(
+                f"❌ Output channels incorrect: {actual_channels} (expected: {expected_channels})"
+            )
 
         # Check for NaN and infinite values
         has_nan = torch.isnan(render_colors).any()
@@ -179,8 +186,13 @@ def test_rasterization_batch():
 
         # Check gradients for each input tensor
         grad_stats = []
-        for name, tensor in [("means", means), ("quats", quats), ("scales", scales),
-                            ("opacities", opacities), ("colors", colors)]:
+        for name, tensor in [
+            ("means", means),
+            ("quats", quats),
+            ("scales", scales),
+            ("opacities", opacities),
+            ("colors", colors),
+        ]:
             has_grad = tensor.grad is not None
             grad_norm = tensor.grad.norm().item() if has_grad else 0.0
             grad_stats.append((name, has_grad, grad_norm))
@@ -203,6 +215,7 @@ def test_rasterization_batch():
     except Exception as e:
         print(f"❌ Error during {render_mode} rasterization: {e}")
         import traceback
+
         traceback.print_exc()
 
     print(f"\n{'='*60}")
@@ -216,7 +229,9 @@ def visualize_batch_rgb_ed_n_outputs():
     """Visualize RGB+ED+N outputs from 4 scenes with 3 cameras each."""
 
     # Load test data from assets/test_garden.npz
-    data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets/test_garden.npz")
+    data_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "assets/test_garden.npz"
+    )
     (
         means,
         quats,
@@ -332,21 +347,29 @@ def visualize_batch_rgb_ed_n_outputs():
         depth_np = depth.cpu().detach().numpy()
         normals_np = normals.cpu().detach().numpy()
 
-        print(f"\nVisualizing outputs for {n_batches} scenes and {n_cameras} cameras...")
+        print(
+            f"\nVisualizing outputs for {n_batches} scenes and {n_cameras} cameras..."
+        )
 
         # Create one image per scene showing all 3 cameras and 3 modalities
         for batch_idx in range(n_batches):
             print(f"Processing scene {batch_idx + 1}/{n_batches}...")
 
             # Create figure for this scene - layout: cameras × modalities
-            plt.figure(figsize=(6 * n_cameras, 4 * 3))  # width: 6 per camera, height: 4 per modality
+            plt.figure(
+                figsize=(6 * n_cameras, 4 * 3)
+            )  # width: 6 per camera, height: 4 per modality
 
             # For each camera in this scene
             for cam_idx in range(n_cameras):
                 # Get data for this scene and camera
                 rgb_img = np.clip(rgb_np[batch_idx, cam_idx], 0, 1)
-                depth_img = depth_np[batch_idx, cam_idx, ..., 0]  # Remove channel dimension
-                normals_img = (normals_np[batch_idx, cam_idx] + 1) / 2  # Convert from [-1,1] to [0,1]
+                depth_img = depth_np[
+                    batch_idx, cam_idx, ..., 0
+                ]  # Remove channel dimension
+                normals_img = (
+                    normals_np[batch_idx, cam_idx] + 1
+                ) / 2  # Convert from [-1,1] to [0,1]
                 normals_img = np.clip(normals_img, 0, 1)
 
                 # Calculate depth range for consistent colormap scaling
@@ -361,27 +384,35 @@ def visualize_batch_rgb_ed_n_outputs():
                 plt.subplot(3, n_cameras, cam_idx + 1)
                 plt.imshow(rgb_img)
                 plt.title(f"Camera {cam_idx}: RGB")
-                plt.axis('off')
+                plt.axis("off")
 
                 # Row 2: Depth
                 plt.subplot(3, n_cameras, cam_idx + 1 + n_cameras)
-                im2 = plt.imshow(depth_img, cmap='viridis', vmin=vmin, vmax=vmax)
+                im2 = plt.imshow(depth_img, cmap="viridis", vmin=vmin, vmax=vmax)
                 plt.colorbar(im2, fraction=0.046, pad=0.04)
                 plt.title(f"Camera {cam_idx}: Expected Depth")
-                plt.axis('off')
+                plt.axis("off")
 
                 # Row 3: Normals
                 plt.subplot(3, n_cameras, cam_idx + 1 + 2 * n_cameras)
                 plt.imshow(normals_img)
                 plt.title(f"Camera {cam_idx}: Expected Normals")
-                plt.axis('off')
+                plt.axis("off")
 
-            plt.suptitle(f"Scene {batch_idx} - All {n_cameras} Cameras", fontsize=16, y=0.98)
+            plt.suptitle(
+                f"Scene {batch_idx} - All {n_cameras} Cameras", fontsize=16, y=0.98
+            )
             plt.tight_layout()
-            plt.savefig(output_dir / f"scene{batch_idx}_rgb_ed_n_visualization.png", dpi=150, bbox_inches='tight')
+            plt.savefig(
+                output_dir / f"scene{batch_idx}_rgb_ed_n_visualization.png",
+                dpi=150,
+                bbox_inches="tight",
+            )
             plt.close()
 
-            print(f"  ✅ Saved scene {batch_idx} visualization to {output_dir}/scene{batch_idx}_rgb_ed_n_visualization.png")
+            print(
+                f"  ✅ Saved scene {batch_idx} visualization to {output_dir}/scene{batch_idx}_rgb_ed_n_visualization.png"
+            )
 
         print(f"\n✅ All scene visualizations saved to {output_dir}/")
         print(f"Each scene has one PNG file showing all cameras and modalities.")
@@ -398,8 +429,10 @@ def visualize_batch_rgb_ed_n_outputs():
     except Exception as e:
         print(f"❌ Error during {render_mode} visualization: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     # Run the original test function
@@ -409,9 +442,9 @@ if __name__ == "__main__":
     else:
         print("\n❌ RGB+ED+N batch rasterization test failed!")
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Running RGB+ED+N batch visualization...")
-    print("="*60)
+    print("=" * 60)
 
     # Run the visualization function
     viz_success = visualize_batch_rgb_ed_n_outputs()

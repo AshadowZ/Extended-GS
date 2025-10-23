@@ -454,6 +454,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 
     v_means2d += idx * 2;
     v_depths += idx;
+    v_normals += idx * 3;
     v_conics += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
@@ -462,6 +463,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
         mat2(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
     mat2 v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+    vec3 v_normal = {v_normals[0], v_normals[1], v_normals[2]};
 
     if (v_compensations != nullptr) {
         // vjp: compensation term
@@ -582,9 +584,6 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     vec4 v_quat_from_normal(0.f);
     // Note: v_R gradient will be accumulated here from normals
     if (v_normals != nullptr) {
-        v_normals += idx * 3;
-        vec3 v_normal = {v_normals[0], v_normals[1], v_normals[2]};
-
         // Recompute intermediates from the forward pass
         vec4 quat_for_normal = glm::make_vec4(quats + bid * N * 4 + gid * 4);
         vec3 scale_for_normal = glm::make_vec3(scales + bid * N * 3 + gid * 3);

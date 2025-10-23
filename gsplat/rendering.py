@@ -622,15 +622,15 @@ def rasterization(
         #     scales = scales.view(B, N, 3)[batch_ids, gaussian_ids] # [nnz, 3]
         #     means = means.view(B, N, 3)[batch_ids, gaussian_ids]   # [nnz, 3]
         # # Normalize quaternion & get rotation matrix
-        # quats_crop = quats / quats.norm(dim=-1, keepdim=True) 
+        # quats_crop = quats / quats.norm(dim=-1, keepdim=True)
         # rots = normalized_quat_to_rotmat(quats_crop)
         # # Compute normal = min-scale axis
         # min_idx = torch.argmin(scales, dim=-1)
         # normals = rots[torch.arange(rots.shape[0]), :, min_idx]
         # # Flip toward camera
         # c2w = torch.inverse(viewmats)
-        # c2w_R = c2w[..., :3, :3]        
-        # c2w_t = c2w[..., :3, 3] 
+        # c2w_R = c2w[..., :3, :3]
+        # c2w_t = c2w[..., :3, 3]
         # means = means[None, :, :].expand(C, -1, -1)
         # viewdirs = c2w_t[:, None, :] - means.detach()
         # viewdirs = viewdirs / (viewdirs.norm(dim=-1, keepdim=True) + 1e-8)
@@ -649,12 +649,14 @@ def rasterization(
         # backgrounds
         if backgrounds is not None:
             backgrounds = torch.cat(
-                [backgrounds,
-                torch.zeros(batch_dims + (C, 1 + 3), device=backgrounds.device)],
+                [
+                    backgrounds,
+                    torch.zeros(batch_dims + (C, 1 + 3), device=backgrounds.device),
+                ],
                 dim=-1,
             )
             # print(f"[Debug] backgrounds shape:{backgrounds.shape}")
-        
+
     elif render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:

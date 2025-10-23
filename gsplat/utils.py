@@ -143,10 +143,10 @@ def inverse_log_transform(y):
 
 
 def depth_to_normal_cam(
-    depths: torch.Tensor, 
-    Ks: torch.Tensor, 
+    depths: torch.Tensor,
+    Ks: torch.Tensor,
     z_depth: bool = True,
-    use_kornia: bool = False
+    use_kornia: bool = False,
 ) -> torch.Tensor:
     """
     Convert depth maps to surface normals in **camera coordinates**.
@@ -185,11 +185,14 @@ def depth_to_normal_cam(
     Z = depths[..., 0]
 
     if not z_depth:
-        dirs = torch.stack([
-            (x - cx + 0.5) / fx,
-            (y - cy + 0.5) / fy,
-            torch.ones_like((x - cx + 0.5) / fx)
-        ], dim=-1)
+        dirs = torch.stack(
+            [
+                (x - cx + 0.5) / fx,
+                (y - cy + 0.5) / fy,
+                torch.ones_like((x - cx + 0.5) / fx),
+            ],
+            dim=-1,
+        )
         dirs = F.normalize(dirs, dim=-1)
         X = dirs[..., 0] * depths[..., 0]
         Y = dirs[..., 1] * depths[..., 0]
@@ -200,7 +203,7 @@ def depth_to_normal_cam(
     # === 3. 检查使用哪种方法计算梯度和法线 ===
     if use_kornia:
         # --- Kornia 方法 ---
-        
+
         # Kornia 需要 [B, C, H, W] 格式
         leading_dims_shape = points.shape[:-3]
         H, W, C = points.shape[-3:]
@@ -209,9 +212,9 @@ def depth_to_normal_cam(
         # 计算空间梯度
         # kornia 输出 [B, C, 2, H, W], 2 的维度是 [dx, dy]
         gradients = kornia.filters.spatial_gradient(points_BCHW)
-        
-        dx_kornia = gradients[..., 0, :, :] # 梯度沿 X (W) 轴
-        dy_kornia = gradients[..., 1, :, :] # 梯度沿 Y (H) 轴
+
+        dx_kornia = gradients[..., 0, :, :]  # 梯度沿 X (W) 轴
+        dy_kornia = gradients[..., 1, :, :]  # 梯度沿 Y (H) 轴
 
         # 叉乘 (dy x dx) 来获取法线，以匹配原版的手动实现
         # *** 此处为修正点 ***
@@ -226,14 +229,14 @@ def depth_to_normal_cam(
 
     else:
         # --- 原始的手动方法 (中央差分) ---
-        
+
         # === Step 3: (Manual) 计算相邻点的差分 (局部切线) ===
         # points[..., y, x, :]
-        
+
         # 梯度沿 Y (H) 轴
-        dy_points = points[..., 2:, 1:-1, :] - points[..., :-2, 1:-1, :]  
+        dy_points = points[..., 2:, 1:-1, :] - points[..., :-2, 1:-1, :]
         # 梯度沿 X (W) 轴
-        dx_points = points[..., 1:-1, 2:, :] - points[..., 1:-1, :-2, :]  
+        dx_points = points[..., 1:-1, 2:, :] - points[..., 1:-1, :-2, :]
 
         # === Step 4: (Manual) 用叉乘计算法向 ===
         # 原版顺序是: cross(dy_points, dx_points)

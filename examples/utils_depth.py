@@ -73,7 +73,10 @@ class Project3D(nn.Module):
         self.register_buffer("eps", torch.tensor(eps).view(1, 1, 1))
 
     def forward(
-        self, points_b4N: torch.Tensor, K_b44: torch.Tensor, cam_T_world_b44: torch.Tensor
+        self,
+        points_b4N: torch.Tensor,
+        K_b44: torch.Tensor,
+        cam_T_world_b44: torch.Tensor,
     ) -> torch.Tensor:
         """
         Projects spatial points in 3D world space to camera image space using
@@ -86,7 +89,9 @@ class Project3D(nn.Module):
         # from Kornia and OpenCV, https://kornia.readthedocs.io/en/latest/_modules/kornia/geometry/conversions.html#convert_points_from_homogeneous
         mask = torch.abs(cam_points_b3N[:, 2:]) > self.eps
         depth_b1N = cam_points_b3N[:, 2:] + self.eps
-        scale = torch.where(mask, 1.0 / depth_b1N, torch.tensor(1.0, device=depth_b1N.device))
+        scale = torch.where(
+            mask, 1.0 / depth_b1N, torch.tensor(1.0, device=depth_b1N.device)
+        )
 
         pix_coords_b2N = cam_points_b3N[:, :2] * scale
 

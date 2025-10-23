@@ -43,6 +43,7 @@ from nerfview import CameraState, RenderTabState, apply_float_colormap
 from functools import lru_cache
 from utils_depth import NormalGenerator
 
+
 @dataclass
 class Config:
     # Disable viewer
@@ -161,7 +162,7 @@ class Config:
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
     """
     max_gauss_ratio: float = 6.0
-    
+
     ### depth and normal regularization
     """Specifies applying depth regularization once every N iterations"""
     depth_reg_every_n: int = 4
@@ -169,7 +170,7 @@ class Config:
     the 'images' directory, load the dense depth maps from it, and use their depth values 
     for regularization.
     """
-    depth_dir_name: Optional[str] = "pi3_depth" # "pi3_depth"
+    depth_dir_name: Optional[str] = "pi3_depth"  # "pi3_depth"
     """Weight of the depth loss"""
     depth_loss_weight: float = 0.2
     """Starting iteration for depth regularization"""
@@ -181,7 +182,7 @@ class Config:
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.
     """
-    normal_dir_name: Optional[str] = "moge_normal" # "moge_normal"
+    normal_dir_name: Optional[str] = "moge_normal"  # "moge_normal"
     """Weight of the render_normal_loss"""
     render_normal_loss_weight: float = 0.1
     """Starting iteration for render_normal regularization"""
@@ -697,8 +698,14 @@ class Runner:
             need_normal = (
                 cfg.normal_dir_name is not None
                 and (
-                    (cfg.surf_normal_loss_weight > 0 and step >= cfg.surf_normal_loss_activation_step)
-                    or (cfg.render_normal_loss_weight > 0 and step >= cfg.render_normal_loss_activation_step)
+                    (
+                        cfg.surf_normal_loss_weight > 0
+                        and step >= cfg.surf_normal_loss_activation_step
+                    )
+                    or (
+                        cfg.render_normal_loss_weight > 0
+                        and step >= cfg.render_normal_loss_activation_step
+                    )
                 )
                 and step % cfg.normal_reg_every_n == 0
             )
@@ -727,9 +734,17 @@ class Runner:
 
             # Parse render outputs based on mode
             if render_mode == "RGB+ED+N":
-                colors, depths, render_normals = renders[..., 0:3], renders[..., 3:4], renders[..., 4:7]
+                colors, depths, render_normals = (
+                    renders[..., 0:3],
+                    renders[..., 3:4],
+                    renders[..., 4:7],
+                )
             elif render_mode == "RGB+ED":
-                colors, depths, render_normals = renders[..., 0:3], renders[..., 3:4], None
+                colors, depths, render_normals = (
+                    renders[..., 0:3],
+                    renders[..., 3:4],
+                    None,
+                )
             else:
                 colors, depths, render_normals = renders, None, None
 
@@ -771,26 +786,36 @@ class Runner:
 
             # depth loss
             if need_depth:
-                depths_prior = data["depth_prior"].to(device)    # [B,H,W,1]
+                depths_prior = data["depth_prior"].to(device)  # [B,H,W,1]
                 depth_loss = self.compute_depth_loss(depths, depths_prior)
                 loss += cfg.depth_loss_weight * depth_loss
 
             # normal loss
             if need_normal:
                 normals_prior = data["normal_prior"].to(device)  # [B,H,W,3]
-                mask = torch.ones_like(depths).float()           # [B,H,W,1]
+                mask = torch.ones_like(depths).float()  # [B,H,W,1]
 
                 # Surface normal loss (from depth)
-                if cfg.surf_normal_loss_weight > 0 and step >= cfg.surf_normal_loss_activation_step:
+                if (
+                    cfg.surf_normal_loss_weight > 0
+                    and step >= cfg.surf_normal_loss_activation_step
+                ):
                     surf_normals = self.get_implied_normal_from_depth(depths, Ks)
-                    surf_normal_loss = self.compute_normal_loss(surf_normals, normals_prior, mask)
+                    surf_normal_loss = self.compute_normal_loss(
+                        surf_normals, normals_prior, mask
+                    )
                     loss += cfg.surf_normal_loss_weight * surf_normal_loss
 
                 # Rendered normal loss
-                if cfg.render_normal_loss_weight > 0 and step >= cfg.render_normal_loss_activation_step:
-                    render_normal_loss = self.compute_normal_loss(render_normals, normals_prior, mask)
+                if (
+                    cfg.render_normal_loss_weight > 0
+                    and step >= cfg.render_normal_loss_activation_step
+                ):
+                    render_normal_loss = self.compute_normal_loss(
+                        render_normals, normals_prior, mask
+                    )
                     loss += cfg.render_normal_loss_weight * render_normal_loss
-                
+
             # regularizations
             if cfg.opacity_reg > 0.0:
                 loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
@@ -1275,20 +1300,24 @@ class Runner:
         elif render_tab_state.render_mode == "render_normal":
             normals_t = render_colors[0, ..., 4:7]  # -> Tensor, shape [H, W, 3]
             normals_t = (normals_t + 1) * 0.5
-            normals_t = 1.0 - normals_t # Better visualization
+            normals_t = 1.0 - normals_t  # Better visualization
             # Ensure range and convert to numpy uint8
-            normals_t = normals_t.clamp(0.0, 1.0).detach().cpu().numpy()  # float in [0,1]
+            normals_t = (
+                normals_t.clamp(0.0, 1.0).detach().cpu().numpy()
+            )  # float in [0,1]
             renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         elif render_tab_state.render_mode == "surf_normal":
             depth = render_colors[0, ..., 0:1]
             normals_t = depth_to_normal_cam(depth, K, z_depth=False, use_kornia=True)
             normals_t = (normals_t + 1) * 0.5
-            normals_t = 1.0 - normals_t # Better visualization
+            normals_t = 1.0 - normals_t  # Better visualization
             # Ensure range and convert to numpy uint8
-            normals_t = normals_t.clamp(0.0, 1.0).detach().cpu().numpy()  # float in [0,1]
+            normals_t = (
+                normals_t.clamp(0.0, 1.0).detach().cpu().numpy()
+            )  # float in [0,1]
             renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         return renders
-    
+
     def compute_depth_loss(
         self, pred_depth: torch.Tensor, gt_depth: torch.Tensor
     ) -> torch.Tensor:
@@ -1312,13 +1341,15 @@ class Runner:
 
         # Automatically infer batch dimension
         if pred_depth.ndim == 4:  # [B,H,W,1]
-            per_image_loss = abs_diff.sum(dim=(1,2,3)) / valid_pix.sum(dim=(1,2,3)).clamp(min=1)
+            per_image_loss = abs_diff.sum(dim=(1, 2, 3)) / valid_pix.sum(
+                dim=(1, 2, 3)
+            ).clamp(min=1)
             depth_loss = per_image_loss.mean()
         else:  # Single image [H,W] or [H,W,1]
             depth_loss = abs_diff.sum() / valid_pix.sum().clamp(min=1)
 
         return depth_loss
-    
+
     def compute_normal_loss(
         self,
         pred_normals_bhw3: torch.Tensor,
@@ -1396,7 +1427,9 @@ class Runner:
         if Ks_b33.dim() == 2:
             Ks_b33 = Ks_b33.unsqueeze(0).repeat(B, 1, 1)
         elif Ks_b33.shape[0] != B:
-            raise ValueError(f"Batch size mismatch: depth batch={B}, K batch={Ks_b33.shape[0]}")
+            raise ValueError(
+                f"Batch size mismatch: depth batch={B}, K batch={Ks_b33.shape[0]}"
+            )
 
         K_b44 = torch.eye(4, device=device).unsqueeze(0).repeat(B, 1, 1)
         K_b44[:, :3, :3] = Ks_b33

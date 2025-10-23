@@ -152,8 +152,7 @@ class Parser:
 
         # Check if any camera has distortion (non-PINHOLE models)
         has_distortion = any(
-            camtype != "perspective"
-            for camtype in camtype_dict.values()
+            camtype != "perspective" for camtype in camtype_dict.values()
         )
         if has_distortion:
             print("Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
@@ -265,7 +264,7 @@ class Parser:
         else:
             transform = np.eye(4)
             scale = 1.0
-        
+
         self.scale = scale
         print(f"[Parser] colmap.py scale: {self.scale}")
 
@@ -380,14 +379,14 @@ class Parser:
         else:
             depth_dir = os.path.join(self.data_dir, depth_dir_name)
             self.depth_paths = []
-            print(f"[Parser] Building depth paths from: {depth_dir} (ext: .npy)")     
+            print(f"[Parser] Building depth paths from: {depth_dir} (ext: .npy)")
             # self.image_names is already a sorted list
             for img_name in self.image_names:
                 base_name, _ = os.path.splitext(img_name)
                 # Hardcoded .npy extension
                 path = os.path.join(depth_dir, base_name + ".npy")
                 self.depth_paths.append(path)
-        
+
         # Process normal map paths (hardcoded .png extension)
         if normal_dir_name is None:
             print("[Parser] No normal directory name provided. Skipping normal priors.")
@@ -441,14 +440,14 @@ class Dataset:
         if self.parser.depth_paths is not None:
             depth_path = self.parser.depth_paths[index]
             try:
-                depth_data = np.load(depth_path).astype(np.float32) # Known to be .npy
+                depth_data = np.load(depth_path).astype(np.float32)  # Known to be .npy
                 depth_data = depth_data * self.parser.scale
             except Exception as e:
                 print(f"Warning: Could not load depth {depth_path}: {e}")
         if self.parser.normal_paths is not None:
             normal_path = self.parser.normal_paths[index]
             try:
-                normal_data = imageio.imread(normal_path)[..., :3] # Known to be .png
+                normal_data = imageio.imread(normal_path)[..., :3]  # Known to be .png
             except Exception as e:
                 print(f"Warning: Could not load normal {normal_path}: {e}")
 
@@ -480,10 +479,14 @@ class Dataset:
 
             # Apply to depth (using same x, y)
             if depth_data is not None:
-                depth_data = depth_data[y : y + self.patch_size, x : x + self.patch_size]
+                depth_data = depth_data[
+                    y : y + self.patch_size, x : x + self.patch_size
+                ]
             # Apply to normal (using same x, y)
             if normal_data is not None:
-                normal_data = normal_data[y : y + self.patch_size, x : x + self.patch_size]
+                normal_data = normal_data[
+                    y : y + self.patch_size, x : x + self.patch_size
+                ]
             # Apply to mask (if exists)
             if mask is not None:
                 mask = mask[y : y + self.patch_size, x : x + self.patch_size]
@@ -495,7 +498,7 @@ class Dataset:
             depth_prior = torch.from_numpy(depth_data).float().unsqueeze(-1)
         else:
             depth_prior = torch.empty(0)
-        if normal_data is not None: # needs to be inverted, to opencv coord
+        if normal_data is not None:  # needs to be inverted, to opencv coord
             normal_prior = torch.from_numpy(normal_data).float() / 255.0
             normal_prior = 1.0 - normal_prior * 2.0
         else:
@@ -506,8 +509,8 @@ class Dataset:
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
-            "depth_prior": depth_prior, # [H, W, 1]
-            "normal_prior": normal_prior, # [H, W, 3]
+            "depth_prior": depth_prior,  # [H, W, 1]
+            "normal_prior": normal_prior,  # [H, W, 3]
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
