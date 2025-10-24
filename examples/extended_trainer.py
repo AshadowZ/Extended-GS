@@ -36,7 +36,6 @@ from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy, ImprovedStrategy
-from gsplat.utils import depth_to_normal_cam
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
@@ -1307,8 +1306,9 @@ class Runner:
             )  # float in [0,1]
             renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         elif render_tab_state.render_mode == "surf_normal":
-            depth = render_colors[0, ..., 0:1]
-            normals_t = depth_to_normal_cam(depth, K, z_depth=False, use_kornia=True)
+            depth = render_colors[..., 0:1]
+            normals_t = self.get_implied_normal_from_depth(depth, K)
+            normals_t = normals_t.squeeze()
             normals_t = (normals_t + 1) * 0.5
             normals_t = 1.0 - normals_t  # Better visualization
             # Ensure range and convert to numpy uint8
