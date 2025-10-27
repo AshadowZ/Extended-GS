@@ -36,7 +36,7 @@ class CameraModel(Enum):
     SIMPLE_RADIAL = "SIMPLE_RADIAL"
     OPENCV = "OPENCV"
     FULL_OPENCV = "FULL_OPENCV"
-    # pycolmap also supports other fisheye models such as OPENCV_FISHEYE, 
+    # pycolmap also supports other fisheye models such as OPENCV_FISHEYE,
     # FOV, etc., but this script assumes a distortion-free camera by default.
 
 
@@ -50,7 +50,16 @@ def run_hloc(
     verbose: bool = False,
     matching_method: Literal["exhaustive", "sequential"] = "sequential",
     feature_type: Literal[
-        "superpoint_aachen", "superpoint_max", "superpoint_inloc", "r2d2", "d2net-ss", "sift", "sosnet", "disk", "aliked-n16", "xfeat"
+        "superpoint_aachen",
+        "superpoint_max",
+        "superpoint_inloc",
+        "r2d2",
+        "d2net-ss",
+        "sift",
+        "sosnet",
+        "disk",
+        "aliked-n16",
+        "xfeat",
     ] = "superpoint_aachen",
     matcher_type: Literal[
         "superpoint+lightglue",
@@ -114,7 +123,9 @@ def run_hloc(
         sys.exit(1)
 
     if refine_pixsfm and not _HAS_PIXSFM:
-        CONSOLE.print("[bold red]Error: use refine_pixsfm, you must install pixel-perfect-sfm toolbox!!")
+        CONSOLE.print(
+            "[bold red]Error: use refine_pixsfm, you must install pixel-perfect-sfm toolbox!!"
+        )
         sys.exit(1)
 
     outputs = colmap_dir
@@ -136,14 +147,14 @@ def run_hloc(
         # Use sequential matching with specified parameters
         retrieval_path = extract_features.main(retrieval_conf, image_dir, outputs)
         pairs_from_sequential.main(
-            output = sfm_pairs,
-            image_list = references,
-            window_size = 6,
-            quadratic_overlap = True,
-            use_loop_closure = True, 
-            retrieval_path = retrieval_path,
-            retrieval_interval = 2,
-            num_loc = 5
+            output=sfm_pairs,
+            image_list=references,
+            window_size=6,
+            quadratic_overlap=True,
+            use_loop_closure=True,
+            retrieval_path=retrieval_path,
+            retrieval_interval=2,
+            num_loc=5,
         )
     else:
         retrieval_path = extract_features.main(retrieval_conf, image_dir, outputs)  # type: ignore
@@ -162,7 +173,10 @@ def run_hloc(
         sfm = PixSfM(  # type: ignore
             conf={
                 "dense_features": {"use_cache": True},
-                "KA": {"dense_features": {"use_cache": True}, "max_kps_per_problem": 1000},
+                "KA": {
+                    "dense_features": {"use_cache": True},
+                    "max_kps_per_problem": 1000,
+                },
                 "BA": {"strategy": "costmaps"},
             }
         )

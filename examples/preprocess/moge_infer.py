@@ -27,7 +27,8 @@ def run_inference(data_dir):
     # 3. 遍历 images 目录下所有图像文件
     image_dir = os.path.join(data_dir, "images")
     image_files = sorted(
-        f for f in os.listdir(image_dir)
+        f
+        for f in os.listdir(image_dir)
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     )
 
@@ -43,7 +44,9 @@ def run_inference(data_dir):
         img_path = os.path.join(image_dir, fname)
 
         img = cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB)
-        img_tensor = torch.tensor(img / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)
+        img_tensor = torch.tensor(
+            img / 255.0, dtype=torch.float32, device=device
+        ).permute(2, 0, 1)
         read_time = time.time() - read_start
         total_read_time += read_time
 
@@ -84,7 +87,9 @@ def run_inference(data_dir):
         total_save_time += save_time
 
         if image_files.index(fname) % 10 == 0:
-            tqdm.write(f"图像 {fname}: 读取 {read_time:.3f}s, 推理 {inference_time:.3f}s, 保存 {save_time:.3f}s")
+            tqdm.write(
+                f"图像 {fname}: 读取 {read_time:.3f}s, 推理 {inference_time:.3f}s, 保存 {save_time:.3f}s"
+            )
 
     # 总结统计
     print("\n" + "=" * 50)
@@ -95,19 +100,23 @@ def run_inference(data_dir):
     print(f"总保存耗时: {total_save_time:.2f}秒")
     print(f"处理图像数量: {len(image_files)}张")
     if len(image_files) > 0:
-        print(f"平均每张图像耗时: {(total_read_time + total_inference_time + total_save_time) / len(image_files):.2f}秒")
+        print(
+            f"平均每张图像耗时: {(total_read_time + total_inference_time + total_save_time) / len(image_files):.2f}秒"
+        )
         print(f"平均推理耗时: {total_inference_time / len(image_files):.2f}秒")
         print(f"平均保存耗时: {total_save_time / len(image_files):.2f}秒")
     print("=" * 50)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run MoGe-2 normal inference on images")
+    parser = argparse.ArgumentParser(
+        description="Run MoGe-2 normal inference on images"
+    )
     parser.add_argument(
         "--data_dir",
         type=str,
         required=True,
-        help="包含 images 文件夹的数据根目录，例如：/path/to/data"
+        help="包含 images 文件夹的数据根目录，例如：/path/to/data",
     )
     args = parser.parse_args()
 

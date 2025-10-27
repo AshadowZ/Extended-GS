@@ -31,6 +31,7 @@ import shutil
 
 from hloc_utils import run_hloc, CameraModel
 
+
 def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
     new_dir = image_dir.parent / "images"
     if new_dir.exists():
@@ -38,7 +39,9 @@ def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
     new_dir.mkdir(parents=True, exist_ok=True)
 
     image_exts = [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"]
-    image_paths = sorted([p for p in image_dir.iterdir() if p.suffix.lower() in image_exts])
+    image_paths = sorted(
+        [p for p in image_dir.iterdir() if p.suffix.lower() in image_exts]
+    )
 
     if not image_paths:
         raise RuntimeError(f"No images found in {image_dir}")
@@ -51,7 +54,13 @@ def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
         shutil.copy2(src_path, dst_path)
 
     with ThreadPoolExecutor(max_workers=16) as ex:
-        list(tqdm(ex.map(copy_one, enumerate(image_paths, start=1)), total=len(image_paths), unit="img"))
+        list(
+            tqdm(
+                ex.map(copy_one, enumerate(image_paths, start=1)),
+                total=len(image_paths),
+                unit="img",
+            )
+        )
 
     print("✅ Copy finished.")
     return new_dir
@@ -85,9 +94,16 @@ def main():
         type=str,
         default="superpoint_aachen",
         choices=[
-            "superpoint_aachen", "superpoint_max", "superpoint_inloc",
-            "r2d2", "d2net-ss", "sift", "sosnet", "disk",
-            "aliked-n16", "xfeat",
+            "superpoint_aachen",
+            "superpoint_max",
+            "superpoint_inloc",
+            "r2d2",
+            "d2net-ss",
+            "sift",
+            "sosnet",
+            "disk",
+            "aliked-n16",
+            "xfeat",
         ],
         help="Feature extractor type.",
     )
@@ -96,9 +112,16 @@ def main():
         type=str,
         default="superglue",
         choices=[
-            "superpoint+lightglue", "disk+lightglue", "aliked+lightglue",
-            "xfeat+lighterglue", "superglue", "superglue-fast",
-            "NN-superpoint", "NN-ratio", "NN-mutual", "adalam",
+            "superpoint+lightglue",
+            "disk+lightglue",
+            "aliked+lightglue",
+            "xfeat+lighterglue",
+            "superglue",
+            "superglue-fast",
+            "NN-superpoint",
+            "NN-ratio",
+            "NN-mutual",
+            "adalam",
         ],
         help="Feature matcher type.",
     )
