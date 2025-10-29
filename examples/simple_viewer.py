@@ -17,6 +17,8 @@ from gsplat.rendering import rasterization
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 
+from utils_depth import get_implied_normal_from_depth
+
 
 def main(local_rank: int, world_rank, world_size: int, args):
     torch.manual_seed(42)
@@ -140,6 +142,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
             "depth(accumulated)": "D",
             "depth(expected)": "ED",
             "alpha": "RGB",
+            "render_normal": "RGB+ED+N",
+            "surf_normal": "ED",
         }
 
         render_colors, render_alphas, info = rasterization(
@@ -200,6 +204,26 @@ def main(local_rank: int, world_rank, world_size: int, args):
             renders = (
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )
+        elif render_tab_state.render_mode == "render_normal":
+            normals_t = render_colors[0, ..., 4:7]  # -> Tensor, shape [H, W, 3]
+            normals_t = (normals_t + 1) * 0.5
+            normals_t = 1.0 - normals_t  # Better visualization
+            # Ensure range and convert to numpy uint8
+            normals_t = (
+                normals_t.clamp(0.0, 1.0).detach().cpu().numpy()
+            )  # float in [0,1]
+            renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
+        elif render_tab_state.render_mode == "surf_normal":
+            depth = render_colors[..., 0:1]
+            normals_t = get_implied_normal_from_depth(depth, K)
+            normals_t = normals_t.squeeze()
+            normals_t = (normals_t + 1) * 0.5
+            normals_t = 1.0 - normals_t  # Better visualization
+            # Ensure range and convert to numpy uint8
+            normals_t = (
+                normals_t.clamp(0.0, 1.0).detach().cpu().numpy()
+            )  # float in [0,1]
+            renders = (normals_t * 255.0).astype(np.uint8)  # numpy array
         return renders
 
     server = viser.ViserServer(port=args.port, verbose=False)
