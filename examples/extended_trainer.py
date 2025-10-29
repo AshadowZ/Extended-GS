@@ -1392,8 +1392,7 @@ class Runner:
 
         # Return mean loss across the batch
         return per_batch_loss.mean()
-    
-    
+
     def compute_flat_loss(self) -> torch.Tensor:
         """
         Computes the flatness loss. This encourages the smallest scale of each Gaussian to be small.
@@ -1407,7 +1406,6 @@ class Runner:
         """
         flat_loss = torch.exp(self.splats["scales"]).amin(dim=-1).mean()
         return flat_loss
-
 
     def compute_scale_regularisation_loss_median(self) -> torch.Tensor:
         """

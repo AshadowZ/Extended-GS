@@ -128,7 +128,7 @@ class NormalGenerator(nn.Module):
         )
         normal_b3hw = F.normalize(normal_b3hw, dim=1)
         return normal_b3hw
-    
+
 
 def get_implied_normal_from_depth(
     depths_bhw1: torch.Tensor, Ks_b33: torch.Tensor
