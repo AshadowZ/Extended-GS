@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
+from functools import lru_cache
 
 OPENGL_TO_OPENCV = np.array(
     [
@@ -127,3 +128,71 @@ class NormalGenerator(nn.Module):
         )
         normal_b3hw = F.normalize(normal_b3hw, dim=1)
         return normal_b3hw
+    
+
+def get_implied_normal_from_depth(
+    depths_bhw1: torch.Tensor, Ks_b33: torch.Tensor
+) -> torch.Tensor:
+    """
+    Computes surface normal maps from a batch of depth maps using camera intrinsics.
+
+    Args:
+        depths_bhw1 (torch.Tensor): Depth maps of shape [B, H, W, 1] or [H, W, 1].
+        Ks_b33 (torch.Tensor): Camera intrinsics [B, 3, 3] or [3, 3].
+
+    Returns:
+        torch.Tensor: Normal maps of shape [B, H, W, 3], with values in [-1, 1].
+    """
+    # Handle input dimensions and batch size
+    if depths_bhw1.dim() == 3:
+        # Single image case -> add batch dim
+        depths_bhw1 = depths_bhw1.unsqueeze(0)
+    elif depths_bhw1.dim() != 4:
+        raise ValueError(
+            f"depths_bhw1 must be [H, W, 1] or [B, H, W, 1], got {depths_bhw1.shape}"
+        )
+
+    B, H, W, _ = depths_bhw1.shape
+    device = depths_bhw1.device
+
+    # Convert to [B, 1, H, W] for NormalGenerator
+    depths_b1hw = depths_bhw1.permute(0, 3, 1, 2)
+
+    # Prepare intrinsics K[3x3] → K[4x4] and invert
+    if Ks_b33.dim() == 2:
+        Ks_b33 = Ks_b33.unsqueeze(0).repeat(B, 1, 1)
+    elif Ks_b33.shape[0] != B:
+        raise ValueError(
+            f"Batch size mismatch: depth batch={B}, K batch={Ks_b33.shape[0]}"
+        )
+
+    K_b44 = torch.eye(4, device=device).unsqueeze(0).repeat(B, 1, 1)
+    K_b44[:, :3, :3] = Ks_b33
+    invK_b44 = torch.inverse(K_b44)
+
+    # Compute normals with NormalGenerator
+    normal_generator = get_normal_generator(height=H, width=W)
+    normals_b3hw = normal_generator(depths_b1hw, invK_b44)  # [B, 3, H, W]
+
+    # Convert to [B, H, W, 3]
+    normals_bhw3 = normals_b3hw.permute(0, 2, 3, 1).contiguous()
+
+    return normals_bhw3
+
+
+@lru_cache(maxsize=None)
+def get_normal_generator(height: int, width: int) -> NormalGenerator:
+    """
+    Gets a normal generator object.
+
+    This is wrapped in lru_cache so for a given height and width, we only create one instance
+    of the normal generator during the whole lifetime of this class instance.
+
+    Args:
+        height (int): The height of the depth map.
+        width (int): The width of the depth map.
+
+    Returns:
+        NormalGenerator: The normal generator object.
+    """
+    return NormalGenerator(height=height, width=width).cuda()
