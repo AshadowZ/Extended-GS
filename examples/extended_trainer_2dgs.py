@@ -318,7 +318,6 @@ class Runner:
 
         if self.model_type == "2dgs":
             key_for_gradient = "gradient_2dgs"
-            # key_for_gradient = "means2d"
         else:
             key_for_gradient = "means2d"
 
@@ -984,7 +983,7 @@ class Runner:
 
         if render_tab_state.render_mode == "depth":
             # normalize depth to [0, 1]
-            depth = render_median
+            depth = render_median[0]
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane
@@ -995,19 +994,13 @@ class Runner:
             depth_norm = torch.clip(depth_norm, 0, 1)
             if render_tab_state.inverse:
                 depth_norm = 1 - depth_norm
-            renders = (
-                apply_float_colormap(depth_norm, render_tab_state.colormap)
-                .cpu()
-                .numpy()
-            )
+            renders = apply_float_colormap(depth_norm, render_tab_state.colormap).cpu().numpy()
         elif render_tab_state.render_mode == "normal":
-            render_normals = render_normals * 0.5 + 0.5  # normalize to [0, 1]
+            render_normals = render_normals[0] * 0.5 + 0.5  # normalize to [0, 1]
             renders = render_normals.cpu().numpy()
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas[0, ..., 0:1]
-            renders = (
-                apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
-            )
+            renders = apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
         else:
             render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
             renders = render_colors.cpu().numpy()
