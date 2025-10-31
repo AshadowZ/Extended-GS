@@ -29,6 +29,7 @@ from utils import (
     rgb_to_sh,
     set_random_seed,
 )
+from utils_depth import get_implied_normal_from_depth
 from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
 from gsplat.strategy import DefaultStrategy, ImprovedStrategy
@@ -449,12 +450,13 @@ class Runner:
 
         assert self.cfg.antialiased is False, "Antialiased is not supported for 2DGS"
 
+        render_mode = kwargs.get("render_mode", "RGB")
+
         if self.model_type == "2dgs":
             (
                 render_colors,
                 render_alphas,
                 render_normals,
-                normals_from_depth,
                 render_distort,
                 render_median,
                 info,
@@ -473,6 +475,16 @@ class Runner:
                 sparse_grad=self.cfg.sparse_grad,
                 **kwargs,
             )
+            normals_from_depth = None
+            if render_mode in ["RGB+D", "RGB+ED", "ED", "D"]:
+                depth_for_normals = render_colors[..., -1:]
+                if render_mode in ["RGB+D", "D"]:
+                    depth_for_normals = depth_for_normals / render_alphas.clamp(
+                        min=1e-10
+                    )
+                normals_from_depth = get_implied_normal_from_depth(
+                    depth_for_normals, Ks
+                )
         elif self.model_type == "2dgs-inria":
             renders, info = rasterization_2dgs_inria_wrapper(
                 means=means,
@@ -491,9 +503,18 @@ class Runner:
             )
             render_colors, render_alphas = renders
             render_normals = info["normals_rend"]
-            normals_from_depth = info["normals_surf"]
             render_distort = info["render_distloss"]
-            render_median = render_colors[..., 3]
+            render_median = render_colors[..., -1:]
+            normals_from_depth = None
+            if render_mode in ["RGB+D", "RGB+ED", "ED", "D"]:
+                depth_for_normals = render_colors[..., -1:]
+                if render_mode in ["RGB+D", "D"]:
+                    depth_for_normals = depth_for_normals / render_alphas.clamp(
+                        min=1e-10
+                    )
+                normals_from_depth = get_implied_normal_from_depth(
+                    depth_for_normals, Ks
+                )
 
         return (
             render_colors,
@@ -593,7 +614,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+D",
+                render_mode="RGB+ED",
                 distloss=self.cfg.dist_loss,
             )
             if renders.shape[-1] == 4:
@@ -624,20 +645,29 @@ class Runner:
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
 
+            normalloss = torch.tensor(0.0, device=device)
             if cfg.normal_loss:
                 if step > cfg.normal_start_iter:
                     curr_normal_lambda = cfg.normal_lambda
                 else:
                     curr_normal_lambda = 0.0
-                # normal consistency loss
-                normals = normals.squeeze(0).permute((2, 0, 1))
-                normals_from_depth *= alphas.squeeze(0).detach()
-                if len(normals_from_depth.shape) == 4:
-                    normals_from_depth = normals_from_depth.squeeze(0)
-                normals_from_depth = normals_from_depth.permute((2, 0, 1))
-                normal_error = (1 - (normals * normals_from_depth).sum(dim=0))[None]
-                normalloss = curr_normal_lambda * normal_error.mean()
-                loss += normalloss
+                # normal consistency loss in camera space
+                if normals_from_depth is not None and curr_normal_lambda > 0.0:
+                    normals_pred = F.normalize(normals, dim=-1)
+                    normals_target = F.normalize(normals_from_depth, dim=-1)
+                    mask = alphas.detach().squeeze(-1)
+                    normal_error = 1.0 - (normals_pred * normals_target).sum(dim=-1)
+                    if mask is not None:
+                        normal_error = normal_error * mask
+                        denom = mask.sum()
+                        if torch.is_nonzero(denom):
+                            normal_error = normal_error.sum() / denom
+                        else:
+                            normal_error = normal_error.mean()
+                    else:
+                        normal_error = normal_error.mean()
+                    normalloss = curr_normal_lambda * normal_error
+                    loss += normalloss
 
             if cfg.dist_loss:
                 if step > cfg.dist_start_iter:
@@ -804,9 +834,8 @@ class Runner:
             )
 
             # write median depths
-            render_median = (render_median - render_median.min()) / (
-                render_median.max() - render_median.min()
-            )
+            denom = render_median.max() - render_median.min()
+            render_median = (render_median - render_median.min()) / (denom + 1e-8)
             # render_median = render_median.detach().cpu().squeeze(0).unsqueeze(-1).repeat(1, 1, 3).numpy()
             render_median = (
                 apply_float_colormap(render_median).detach().cpu().squeeze(0).numpy()
@@ -818,25 +847,24 @@ class Runner:
             )
 
             # write normals
-            normals = (normals * 0.5 + 0.5).squeeze(0).cpu().numpy()
-            normals_output = (normals * 255).astype(np.uint8)
+            normals_img = (normals[0] * 0.5 + 0.5).cpu().numpy()
+            normals_output = (normals_img * 255).astype(np.uint8)
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_normal_{step}.png", normals_output
             )
 
             # write normals from depth
-            normals_from_depth *= alphas.squeeze(0).detach()
-            normals_from_depth = (normals_from_depth * 0.5 + 0.5).cpu().numpy()
-            normals_from_depth = (normals_from_depth - np.min(normals_from_depth)) / (
-                np.max(normals_from_depth) - np.min(normals_from_depth)
-            )
-            normals_from_depth_output = (normals_from_depth * 255).astype(np.uint8)
-            if len(normals_from_depth_output.shape) == 4:
-                normals_from_depth_output = normals_from_depth_output.squeeze(0)
-            imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png",
-                normals_from_depth_output,
-            )
+            if normals_from_depth is not None:
+                normals_depth = normals_from_depth * alphas.detach()
+                normals_depth = (normals_depth[0] * 0.5 + 0.5).cpu().numpy()
+                normals_depth = (normals_depth - normals_depth.min()) / (
+                    normals_depth.max() - normals_depth.min() + 1e-8
+                )
+                normals_from_depth_output = (normals_depth * 255).astype(np.uint8)
+                imageio.imwrite(
+                    f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png",
+                    normals_from_depth_output,
+                )
 
             # write distortions
 
@@ -906,7 +934,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _, surf_normals, _, _, _ = self.rasterize_splats(
+            renders, _, _, normals_from_depth, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -919,10 +947,6 @@ class Runner:
             colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
             depths = renders[0, ..., 3:4]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
-
-            surf_normals = (surf_normals - surf_normals.min()) / (
-                surf_normals.max() - surf_normals.min()
-            )
 
             # write images
             canvas = torch.cat(
