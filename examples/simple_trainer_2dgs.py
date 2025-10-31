@@ -45,7 +45,7 @@ class Config:
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
-    data_factor: int = 4
+    data_factor: int = 1
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
@@ -68,9 +68,9 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [30_000])
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -97,7 +97,7 @@ class Config:
     # GSs with opacity below this value will be pruned
     prune_opa: float = 0.05
     # GSs with image plane gradient above this value will be split/duplicated
-    grow_grad2d: float = 0.0002
+    grow_grad2d: float = 0.0001
     # GSs with scale below this value will be duplicated. Above will be split
     grow_scale3d: float = 0.01
     # GSs with scale above this value will be pruned.
@@ -305,6 +305,7 @@ class Runner:
 
         if self.model_type == "2dgs":
             key_for_gradient = "gradient_2dgs"
+            # key_for_gradient = "means2d"
         else:
             key_for_gradient = "means2d"
 
@@ -325,7 +326,9 @@ class Runner:
             key_for_gradient=key_for_gradient,
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
-        self.strategy_state = self.strategy.initialize_state()
+        self.strategy_state = self.strategy.initialize_state(
+            scene_scale=self.scene_scale
+        )
 
         self.pose_optimizers = []
         if cfg.pose_opt:
