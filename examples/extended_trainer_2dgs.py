@@ -31,7 +31,7 @@ from utils import (
 )
 from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
-from gsplat.strategy import DefaultStrategy
+from gsplat.strategy import DefaultStrategy, ImprovedStrategy
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
 
@@ -102,7 +102,10 @@ class Config:
     grow_scale3d: float = 0.01
     # GSs with scale above this value will be pruned.
     prune_scale3d: float = 0.1
-
+    # GSs with large projected footprint will be pruned.
+    prune_scale2d: float = 0.15
+    # Stop refining based on 2D scale after this iteration (0 disables it)
+    refine_scale2d_stop_iter: int = 4000
     # Start refining GSs after this iteration
     refine_start_iter: int = 500
     # Stop refining GSs after this iteration
@@ -111,6 +114,8 @@ class Config:
     reset_every: int = 3000
     # Refine GSs every this steps
     refine_every: int = 100
+    # Maximum number of GSs allowed when using ImprovedStrategy
+    budget: int = 2_000_000
 
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
@@ -160,6 +165,10 @@ class Config:
 
     # Model for splatting.
     model_type: Literal["2dgs", "2dgs-inria"] = "2dgs"
+    # Densification strategy type.
+    strategy_type: Literal["default", "improved"] = "default"
+    # Whether to print verbose information from the densification strategy.
+    strategy_verbose: bool = True
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -175,6 +184,10 @@ class Config:
         self.refine_stop_iter = int(self.refine_stop_iter * factor)
         self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
+        if self.refine_scale2d_stop_iter > 0:
+            self.refine_scale2d_stop_iter = int(
+                self.refine_scale2d_stop_iter * factor
+            )
 
 
 def create_splats_with_optimizers(
@@ -310,21 +323,45 @@ class Runner:
             key_for_gradient = "means2d"
 
         # Densification Strategy
-        self.strategy = DefaultStrategy(
-            verbose=True,
-            prune_opa=cfg.prune_opa,
-            grow_grad2d=cfg.grow_grad2d,
-            grow_scale3d=cfg.grow_scale3d,
-            prune_scale3d=cfg.prune_scale3d,
-            # refine_scale2d_stop_iter=4000, # splatfacto behavior
-            refine_start_iter=cfg.refine_start_iter,
-            refine_stop_iter=cfg.refine_stop_iter,
-            reset_every=cfg.reset_every,
-            refine_every=cfg.refine_every,
-            absgrad=cfg.absgrad,
-            revised_opacity=cfg.revised_opacity,
-            key_for_gradient=key_for_gradient,
-        )
+        if cfg.strategy_type == "default":
+            self.strategy = DefaultStrategy(
+                verbose=cfg.strategy_verbose,
+                prune_opa=cfg.prune_opa,
+                grow_grad2d=cfg.grow_grad2d,
+                grow_scale3d=cfg.grow_scale3d,
+                prune_scale3d=cfg.prune_scale3d,
+                prune_scale2d=cfg.prune_scale2d,
+                refine_scale2d_stop_iter=cfg.refine_scale2d_stop_iter,
+                refine_start_iter=cfg.refine_start_iter,
+                refine_stop_iter=cfg.refine_stop_iter,
+                reset_every=cfg.reset_every,
+                refine_every=cfg.refine_every,
+                absgrad=cfg.absgrad,
+                revised_opacity=cfg.revised_opacity,
+                key_for_gradient=key_for_gradient,
+            )
+        elif cfg.strategy_type == "improved":
+            if not cfg.absgrad:
+                print(
+                    "[Warning] ImprovedStrategy typically expects absgrad=True for better densification."
+                )
+            self.strategy = ImprovedStrategy(
+                verbose=cfg.strategy_verbose,
+                prune_opa=cfg.prune_opa,
+                grow_grad2d=cfg.grow_grad2d,
+                prune_scale3d=cfg.prune_scale3d,
+                prune_scale2d=cfg.prune_scale2d,
+                refine_scale2d_stop_iter=cfg.refine_scale2d_stop_iter,
+                refine_start_iter=cfg.refine_start_iter,
+                refine_stop_iter=cfg.refine_stop_iter,
+                reset_every=cfg.reset_every,
+                refine_every=cfg.refine_every,
+                absgrad=cfg.absgrad,
+                key_for_gradient=key_for_gradient,
+                budget=cfg.budget,
+            )
+        else:
+            raise ValueError(f"Unknown strategy_type: {cfg.strategy_type}")
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state(
             scene_scale=self.scene_scale
@@ -498,7 +535,7 @@ class Runner:
             self.trainset,
             batch_size=cfg.batch_size,
             shuffle=True,
-            num_workers=4,
+            num_workers=8,
             persistent_workers=True,
             pin_memory=True,
         )
