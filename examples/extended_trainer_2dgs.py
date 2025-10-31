@@ -1005,8 +1005,23 @@ class Runner:
         render_tab_state.total_gs_count = len(self.splats["means"])
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
 
-        if render_tab_state.render_mode == "depth":
+        if render_tab_state.render_mode == "expected_depth":
             # normalize depth to [0, 1]
+            depth = render_colors[0, ..., -1]
+            if render_tab_state.normalize_nearfar:
+                near_plane = render_tab_state.near_plane
+                far_plane = render_tab_state.far_plane
+            else:
+                near_plane = depth.min()
+                far_plane = depth.max()
+            depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+            depth_norm = torch.clip(depth_norm, 0, 1)
+            if render_tab_state.inverse:
+                depth_norm = 1 - depth_norm
+            renders = apply_float_colormap(
+                depth_norm.unsqueeze(-1), render_tab_state.colormap
+            ).cpu().numpy()
+        elif render_tab_state.render_mode == "median_depth":
             depth = render_median[0]
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
@@ -1018,10 +1033,20 @@ class Runner:
             depth_norm = torch.clip(depth_norm, 0, 1)
             if render_tab_state.inverse:
                 depth_norm = 1 - depth_norm
-            renders = apply_float_colormap(depth_norm, render_tab_state.colormap).cpu().numpy()
-        elif render_tab_state.render_mode == "normal":
+            renders = apply_float_colormap(
+                depth_norm.unsqueeze(-1), render_tab_state.colormap
+            ).cpu().numpy()
+        elif render_tab_state.render_mode == "render_normal":
             render_normals = render_normals[0] * 0.5 + 0.5  # normalize to [0, 1]
+            render_normals = 1 - render_normals # for better vis
             renders = render_normals.cpu().numpy()
+        elif render_tab_state.render_mode == "surf_normal":
+            if normals_from_depth is not None:
+                surf_normals = normals_from_depth[0] * 0.5 + 0.5
+                surf_normals = 1 - surf_normals # for better vis
+                renders = surf_normals.cpu().numpy()
+            else:
+                renders = render_normals[0].mul(0.5).add(0.5).cpu().numpy()
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas[0, ..., 0:1]
             renders = apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
