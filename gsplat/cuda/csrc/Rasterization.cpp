@@ -459,6 +459,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 rasterize_to_pixels_2dgs_bwd(
     // Gaussian parameters
@@ -524,8 +525,10 @@ rasterize_to_pixels_2dgs_bwd(
     at::Tensor v_normals = at::zeros_like(normals);
     at::Tensor v_opacities = at::zeros_like(opacities);
     at::Tensor v_means2d_abs;
+    at::Tensor v_densify_abs;
     if (absgrad) {
         v_means2d_abs = at::zeros_like(means2d);
+        v_densify_abs = at::zeros_like(densify);
     }
     at::Tensor v_densify = at::zeros_like(densify);
 
@@ -560,7 +563,8 @@ rasterize_to_pixels_2dgs_bwd(
             v_colors,                                                          \
             v_opacities,                                                       \
             v_normals,                                                         \
-            v_densify                                                          \
+            v_densify,                                                         \
+            absgrad ? c10::optional<at::Tensor>(v_densify_abs) : c10::nullopt  \
         );                                                                     \
         break;
 
@@ -599,7 +603,8 @@ rasterize_to_pixels_2dgs_bwd(
         v_colors,
         v_opacities,
         v_normals,
-        v_densify
+        v_densify,
+        v_densify_abs
     );
 }
 

@@ -99,7 +99,7 @@ class Config:
     # GSs with opacity below this value will be pruned
     prune_opa: float = 0.05
     # GSs with image plane gradient above this value will be split/duplicated
-    grow_grad2d: float = 0.00008
+    grow_grad2d: float = 0.00004
     # GSs with scale below this value will be duplicated. Above will be split
     grow_scale3d: float = 0.01
     # GSs with scale above this value will be pruned.
@@ -124,7 +124,7 @@ class Config:
     # Use sparse gradients for optimization. (experimental)
     sparse_grad: bool = False
     # Use absolute gradient for pruning. This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006
-    absgrad: bool = False
+    absgrad: bool = True
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
     # Whether to use revised opacity heuristic from arXiv:2404.06109 (experimental)

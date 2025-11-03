@@ -3,6 +3,7 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
+#include <cmath>
 
 #include "Common.h"
 #include "Rasterization.h"
@@ -86,6 +87,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     scalar_t *__restrict__ v_colors,         // [..., N, CDIM] or [nnz, CDIM]
     scalar_t *__restrict__ v_opacities,      // [..., N] or [nnz]
     scalar_t *__restrict__ v_normals,        // [..., N, 3] or [nnz, 3]
+    vec2 *__restrict__ v_densify_abs,        // [..., N, 2] or [nnz, 2]
     scalar_t *__restrict__ v_densify
 ) {
     /**
@@ -674,8 +676,16 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 float *v_ray_transforms_ptr =
                     (float *)(v_ray_transforms) + 9 * g;
                 float depth = w_M.z;
-                v_densify_ptr[0] = v_ray_transforms_ptr[2] * depth;
-                v_densify_ptr[1] = v_ray_transforms_ptr[5] * depth;
+                float densify_x = v_ray_transforms_ptr[2] * depth;
+                float densify_y = v_ray_transforms_ptr[5] * depth;
+                v_densify_ptr[0] = densify_x;
+                v_densify_ptr[1] = densify_y;
+                if (v_densify_abs != nullptr) {
+                    float *v_densify_abs_ptr =
+                        (float *)(v_densify_abs) + 2 * g;
+                    v_densify_abs_ptr[0] = fabsf(densify_x);
+                    v_densify_abs_ptr[1] = fabsf(densify_y);
+                }
             }
         }
     }
@@ -717,7 +727,8 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     at::Tensor v_colors,                    // [..., N, 3] or [nnz, 3]
     at::Tensor v_opacities,                 // [..., N] or [nnz]
     at::Tensor v_normals,                   // [..., N, 3] or [nnz, 3]
-    at::Tensor v_densify                    // [..., N, 2] or [nnz, 2]
+    at::Tensor v_densify,                   // [..., N, 2] or [nnz, 2]
+    at::optional<at::Tensor> v_densify_abs  // [..., N, 2] or [nnz, 2]
 ) {
     bool packed = means2d.dim() == 2;
 
@@ -797,6 +808,11 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
             v_colors.data_ptr<float>(),
             v_opacities.data_ptr<float>(),
             v_normals.data_ptr<float>(),
+            v_densify_abs.has_value()
+                ? reinterpret_cast<vec2 *>(
+                      v_densify_abs.value().data_ptr<float>()
+                  )
+                : nullptr,
             v_densify.data_ptr<float>()
         );
 }
@@ -834,7 +850,8 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
         const at::Tensor v_colors,                                             \
         const at::Tensor v_opacities,                                          \
         const at::Tensor v_normals,                                            \
-        const at::Tensor v_densify                                             \
+        const at::Tensor v_densify,                                            \
+        const at::optional<at::Tensor> v_densify_abs                           \
     );
 
 __INS__(1)
