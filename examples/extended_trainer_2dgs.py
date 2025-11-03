@@ -158,20 +158,30 @@ class Config:
     # Iteration to start distortion loss regulerization
     dist_start_iter: int = 3_000
 
-    # Depth regularization.
+    # Apply depth regularization once every N training iterations
     depth_reg_every_n: int = 4
+    # Name of the directory containing depth priors relative to each scene
     depth_dir_name: Optional[str] = "pi3_depth"
+    # Weight assigned to the depth prior loss term
     depth_loss_weight: float = 0.3
+    # Iteration after which depth regularization becomes active
     depth_loss_activation_step: int = 1_000
 
-    # Normal regularization.
+    # Apply normal regularization once every N training iterations
     normal_reg_every_n: int = 8
+    # Name of the directory containing normal priors relative to each scene
     normal_dir_name: Optional[str] = "moge_normal"
+    # Weight assigned to the rendered normal loss term
     render_normal_loss_weight: float = 0.1
+    # Iteration after which rendered normal regularization becomes active
     render_normal_loss_activation_step: int = 7_000
+    # Weight assigned to the surface normal loss term derived from depth
     surf_normal_loss_weight: float = 0.1
+    # Iteration after which surface normal regularization becomes active
     surf_normal_loss_activation_step: int = 7_000
+    # Weight assigned to enforcing consistency between rendered and depth normals
     consistency_normal_loss_weight: float = 0.0
+    # Iteration after which normal consistency regularization becomes active
     consistency_normal_loss_activation_step: int = 7_000
 
     # Enable bilateral grid. (experimental)
