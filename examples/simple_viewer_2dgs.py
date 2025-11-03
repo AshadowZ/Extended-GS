@@ -12,29 +12,44 @@ from gsplat.rendering import rasterization_2dgs
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
+from utils_depth import get_implied_normal_from_depth
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
     torch.manual_seed(42)
     device = torch.device("cuda", local_rank)
 
-    means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
+    means, quats, scales, opacities = [], [], [], []
+    colors_list = []
+    uses_sh = None
     for ckpt_path in args.ckpt:
         ckpt = torch.load(ckpt_path, map_location=device)["splats"]
         means.append(ckpt["means"])
         quats.append(F.normalize(ckpt["quats"], p=2, dim=-1))
         scales.append(torch.exp(ckpt["scales"]))
         opacities.append(torch.sigmoid(ckpt["opacities"]))
-        sh0.append(ckpt["sh0"])
-        shN.append(ckpt["shN"])
+        has_sh = "sh0" in ckpt and "shN" in ckpt
+        if uses_sh is None:
+            uses_sh = has_sh
+        else:
+            assert uses_sh == has_sh, "All checkpoints must either use SH or direct colors consistently."
+
+        if has_sh:
+            sh0 = ckpt["sh0"]
+            shN = ckpt["shN"]
+            colors_list.append(torch.cat([sh0, shN], dim=-2))
+        elif "colors" in ckpt:
+            colors_list.append(torch.sigmoid(ckpt["colors"]))
+        else:
+            raise KeyError(
+                f"Checkpoint {ckpt_path} is missing color information (expected 'sh0/shN' or 'colors')."
+            )
     means = torch.cat(means, dim=0)
     quats = torch.cat(quats, dim=0)
     scales = torch.cat(scales, dim=0)
     opacities = torch.cat(opacities, dim=0)
-    sh0 = torch.cat(sh0, dim=0)
-    shN = torch.cat(shN, dim=0)
-    colors = torch.cat([sh0, shN], dim=-2)
-    sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
+    colors = torch.cat(colors_list, dim=0).unsqueeze(0)
+    sh_degree = int(math.sqrt(colors.shape[-2]) - 1) if uses_sh else None
     print("Number of Gaussians:", len(means))
 
     # register and open viewer
@@ -57,7 +72,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
             render_colors,
             render_alphas,
             render_normals,
-            normals_from_depth,
             render_distort,
             render_median,
             info,
@@ -80,16 +94,22 @@ def main(local_rank: int, world_rank, world_size: int, args):
             far_plane=render_tab_state.far_plane,
             radius_clip=render_tab_state.radius_clip,
             eps2d=render_tab_state.eps2d,
-            render_mode="RGB+ED",
+            render_mode={
+                "rgb": "RGB",
+                "expected_depth": "RGB+ED",
+                "median_depth": "RGB+ED",
+                "render_normal": "RGB+ED",
+                "surf_normal": "RGB+ED",
+                "alpha": "RGB",
+            }[render_tab_state.render_mode],
             backgrounds=torch.tensor([render_tab_state.backgrounds], device=device)
             / 255.0,
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
 
-        if render_tab_state.render_mode == "depth":
-            # normalize depth to [0, 1]
-            depth = render_median
+        if render_tab_state.render_mode == "expected_depth":
+            depth = render_colors[0, ..., -1]
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane
@@ -101,13 +121,35 @@ def main(local_rank: int, world_rank, world_size: int, args):
             if render_tab_state.inverse:
                 depth_norm = 1 - depth_norm
             renders = (
-                apply_float_colormap(depth_norm, render_tab_state.colormap)
+                apply_float_colormap(depth_norm.unsqueeze(-1), render_tab_state.colormap)
                 .cpu()
                 .numpy()
             )
-        elif render_tab_state.render_mode == "normal":
-            render_normals = render_normals * 0.5 + 0.5  # normalize to [0, 1]
-            renders = render_normals.cpu().numpy()
+        elif render_tab_state.render_mode == "median_depth":
+            depth = render_median[0, ..., 0]
+            if render_tab_state.normalize_nearfar:
+                near_plane = render_tab_state.near_plane
+                far_plane = render_tab_state.far_plane
+            else:
+                near_plane = depth.min()
+                far_plane = depth.max()
+            depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+            depth_norm = torch.clip(depth_norm, 0, 1)
+            if render_tab_state.inverse:
+                depth_norm = 1 - depth_norm
+            renders = (
+                apply_float_colormap(depth_norm.unsqueeze(-1), render_tab_state.colormap)
+                .cpu()
+                .numpy()
+            )
+        elif render_tab_state.render_mode == "render_normal":
+            render_normals_vis = 1 - (render_normals[0] * 0.5 + 0.5)
+            renders = render_normals_vis.cpu().numpy()
+        elif render_tab_state.render_mode == "surf_normal":
+            depth = render_colors[0, ..., -1:]
+            normals_vis = get_implied_normal_from_depth(depth, K[None])
+            normals_vis = 1 - (normals_vis[0] * 0.5 + 0.5)
+            renders = normals_vis.cpu().numpy()
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas[0, ..., 0:1]
             renders = (

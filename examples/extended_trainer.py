@@ -215,6 +215,8 @@ class Config:
     use_bilateral_grid: bool = True
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
+    # Whether use fused-bilateral grid
+    use_fused_bilagrid: bool = True
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -226,9 +228,6 @@ class Config:
     # 3DGUT (uncented transform + eval 3D)
     with_ut: bool = False
     with_eval3d: bool = False
-
-    # Whether use fused-bilateral grid
-    use_fused_bilagrid: bool = True
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
