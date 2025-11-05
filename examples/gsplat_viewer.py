@@ -27,9 +27,9 @@ class GsplatRenderTabState(RenderTabState):
     ] = "rgb"
     normalize_nearfar: bool = False
     inverse: bool = False
-    colormap: Literal["turbo", "viridis", "magma", "inferno", "cividis", "gray"] = (
-        "turbo"
-    )
+    colormap: Literal[
+        "turbo", "viridis", "magma", "inferno", "cividis", "gray"
+    ] = "turbo"
     rasterize_mode: Literal["classic", "antialiased"] = "classic"
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
@@ -251,9 +251,9 @@ class GsplatViewer(Viewer):
 
     def _after_render(self):
         # Update the GUI elements with current values
-        self._rendering_tab_handles["total_gs_count_number"].value = (
-            self.render_tab_state.total_gs_count
-        )
-        self._rendering_tab_handles["rendered_gs_count_number"].value = (
-            self.render_tab_state.rendered_gs_count
-        )
+        self._rendering_tab_handles[
+            "total_gs_count_number"
+        ].value = self.render_tab_state.total_gs_count
+        self._rendering_tab_handles[
+            "rendered_gs_count_number"
+        ].value = self.render_tab_state.rendered_gs_count

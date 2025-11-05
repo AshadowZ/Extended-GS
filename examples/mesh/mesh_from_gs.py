@@ -478,14 +478,7 @@ def main():
                 color = renders[..., 0:3].clamp(0.0, 1.0)  # [1, H, W, 3]
                 depth = renders[..., 3:4]  # [1, H, W, 1]
             else:
-                (
-                    render_colors,
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                ) = rasterization_2dgs(
+                (render_colors, _, _, _, _, _,) = rasterization_2dgs(
                     means=means,
                     quats=quats,
                     scales=scales,

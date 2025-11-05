@@ -291,9 +291,7 @@ def create_tsdf_mesh(
     cluster_n_triangles = np.asarray(cluster_n_triangles)
 
     # 根据三角面片数量阈值筛选
-    min_triangles = int(
-        np.max(cluster_n_triangles) * 0.05
-    )  # 保留最大连通块的5%以上，其余丢弃
+    min_triangles = int(np.max(cluster_n_triangles) * 0.05)  # 保留最大连通块的5%以上，其余丢弃
     mask = cluster_n_triangles[triangle_clusters] >= min_triangles
     mesh.remove_triangles_by_mask(~mask)
     mesh.remove_unreferenced_vertices()
@@ -307,21 +305,15 @@ def create_tsdf_mesh(
 def main():
     parser = argparse.ArgumentParser(description="VGGT -> TSDF Mesh & Visualization")
     parser.add_argument("--data_dir", type=str, required=True, help="COLMAP 数据集路径")
-    parser.add_argument(
-        "--chunk_size", type=int, default=45, help="分块推理的批次大小 (默认: 45)"
-    )
+    parser.add_argument("--chunk_size", type=int, default=45, help="分块推理的批次大小 (默认: 45)")
     parser.add_argument(
         "--tsdf_frame_interval",
         type=int,
         default=1,
         help="TSDF重建使用的帧间隔 (默认: 1，使用所有帧；2表示每隔一帧使用)",
     )
-    parser.add_argument(
-        "--save_depth_vis", action="store_true", help="是否保存深度图可视化"
-    )
-    parser.add_argument(
-        "--save_point_clouds", action="store_true", help="是否保存彩色点云"
-    )
+    parser.add_argument("--save_depth_vis", action="store_true", help="是否保存深度图可视化")
+    parser.add_argument("--save_point_clouds", action="store_true", help="是否保存彩色点云")
     parser.add_argument(
         "--conf_percentile",
         type=float,
