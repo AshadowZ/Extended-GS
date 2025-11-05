@@ -28,7 +28,7 @@ from .distributed import (
     all_to_all_int32,
     all_to_all_tensor_list,
 )
-from .utils import depth_to_normal, get_projection_matrix
+from .utils import get_projection_matrix
 
 
 def rasterization(
@@ -1340,7 +1340,7 @@ def rasterization_2dgs(
     absgrad: bool = False,
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
     This function supports a handful of features, similar to the :func:`rasterization` function.
@@ -1398,9 +1398,7 @@ def rasterization_2dgs(
 
         **render_alphas**: The rendered alphas. [..., C, height, width, 1].
 
-        **render_normals**: The rendered normals. [..., C, height, width, 3].
-
-        **surf_normals**: surface normal from depth. [..., C, height, width, 3]
+        **render_normals**: The rendered normals in camera space. [..., C, height, width, 3].
 
         **render_distort**: The rendered distortions. [..., C, height, width, 1].
         L1 version, different from L2 version in 2DGS paper.
@@ -1425,13 +1423,13 @@ def rasterization_2dgs(
         >>>    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
         >>> width, height = 300, 200
         >>> # render
-        >>> colors, alphas, normals, surf_normals, distort, median_depth, meta = rasterization_2dgs(
+        >>> colors, alphas, normals, distort, median_depth, meta = rasterization_2dgs(
         >>>    means, quats, scales, opacities, colors, viewmats, Ks, width, height
         >>> )
         >>> print (colors.shape, alphas.shape)
         torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])
-        >>> print (normals.shape, surf_normals.shape)
-        torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 3])
+        >>> print (normals.shape)
+        torch.Size([1, 200, 300, 3])
         >>> print (distort.shape, median_depth.shape)
         torch.Size([1, 200, 300, 1]) torch.Size([1, 200, 300, 1])
         >>> print (meta.keys())
@@ -1618,7 +1616,6 @@ def rasterization_2dgs(
         absgrad=absgrad,
         distloss=distloss,
     )
-    render_normals_from_depth = None
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
@@ -1628,16 +1625,6 @@ def rasterization_2dgs(
             ],
             dim=-1,
         )
-    if render_mode in ["RGB+ED", "RGB+D"]:
-        # render_depths = render_colors[..., -1:]
-        if depth_mode == "expected":
-            depth_for_normal = render_colors[..., -1:]
-        elif depth_mode == "median":
-            depth_for_normal = render_median
-
-        render_normals_from_depth = depth_to_normal(
-            depth_for_normal, torch.linalg.inv(viewmats), Ks
-        ).squeeze(0)
 
     meta = {
         "camera_ids": camera_ids,
@@ -1662,15 +1649,10 @@ def rasterization_2dgs(
         "gradient_2dgs": densify,  # This holds the gradient used for densification for 2dgs
     }
 
-    render_normals = torch.einsum(
-        "...ij,...hwj->...hwi", torch.linalg.inv(viewmats)[..., :3, :3], render_normals
-    )
-
     return (
         render_colors,
         render_alphas,
         render_normals,
-        render_normals_from_depth,
         render_distort,
         render_median,
         meta,
@@ -1793,7 +1775,6 @@ def rasterization_2dgs_inria_wrapper(
     render_depth_median = allmap[..., 5:6]
     render_dist = allmap[..., 6:7]
 
-    render_normal = render_normal @ (world_view_transform[:3, :3].T)
     render_depth_expected = render_depth_expected / render_alphas
     render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
     render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
@@ -1805,14 +1786,10 @@ def rasterization_2dgs_inria_wrapper(
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    normals_surf = depth_to_normal(render_depth, torch.linalg.inv(viewmats), Ks)
-    normals_surf = normals_surf * (render_alphas).detach()
-
     render_colors = torch.cat([render_colors, render_depth], dim=-1)
 
     meta = {
         "normals_rend": render_normal,
-        "normals_surf": normals_surf,
         "render_distloss": render_dist,
         "means2d": means2D,
         "width": width,

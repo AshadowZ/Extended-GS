@@ -2565,6 +2565,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_opacities,
             v_normals,
             v_densify,
+            v_densify_abs,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_2dgs_bwd")(
             means2d,
             ray_transforms,
@@ -2593,6 +2594,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         torch.cuda.synchronize()
         if absgrad:
             means2d.absgrad = v_means2d_abs
+            densify.absgrad = v_densify_abs
 
         if ctx.needs_input_grad[6]:
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(

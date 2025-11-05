@@ -315,10 +315,15 @@ def main():
     parser.add_argument("--save_depth_vis", action="store_true", help="是否保存深度图可视化")
     parser.add_argument("--save_point_clouds", action="store_true", help="是否保存彩色点云")
     parser.add_argument(
-        "--conf_percentile", type=float, default=0.0, help="用于过滤低置信度像素的百分位数阈值 (默认: 0)"
+        "--conf_percentile",
+        type=float,
+        default=0.0,
+        help="用于过滤低置信度像素的百分位数阈值 (默认: 0)",
     )
     parser.add_argument(
-        "--skip_inference", action="store_true", help="跳过推理阶段，直接使用现有的chunk_predictions"
+        "--skip_inference",
+        action="store_true",
+        help="跳过推理阶段，直接使用现有的chunk_predictions",
     )
     args = parser.parse_args()
 

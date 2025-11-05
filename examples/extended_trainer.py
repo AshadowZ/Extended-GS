@@ -162,7 +162,7 @@ class Config:
 
     ### depth and normal regularization
     """Specifies applying depth regularization once every N iterations"""
-    depth_reg_every_n: int = 4
+    depth_reg_every_n: int = 6
     """If not None, the code will look for a folder named 'depth_dir_name' at the same level as
     the 'images' directory, load the dense depth maps from it, and use their depth values 
     for regularization.
@@ -174,7 +174,7 @@ class Config:
     depth_loss_activation_step: int = 1000
 
     """Specifies applying normal regularization once every N iterations"""
-    normal_reg_every_n: int = 8
+    normal_reg_every_n: int = 12
     """If not None, the code will look for a folder named 'normal_dir_name' at the same level as
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.
@@ -215,6 +215,8 @@ class Config:
     use_bilateral_grid: bool = True
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
+    # Whether use fused-bilateral grid
+    use_fused_bilagrid: bool = True
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -226,9 +228,6 @@ class Config:
     # 3DGUT (uncented transform + eval 3D)
     with_ut: bool = False
     with_eval3d: bool = False
-
-    # Whether use fused-bilateral grid
-    use_fused_bilagrid: bool = True
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]

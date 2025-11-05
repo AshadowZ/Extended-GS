@@ -37,9 +37,9 @@ except ImportError:
     exit(1)
 # --- Requires gsplat library ---
 try:
-    from gsplat.rendering import rasterization
+    from gsplat.rendering import rasterization, rasterization_2dgs
 except ImportError:
-    print("Error: Failed to import 'gsplat.rendering.rasterization'.")
+    print("Error: Failed to import required gsplat rendering functions.")
     print("Please ensure 'gsplat' library is installed (e.g., pip install gsplat)")
     exit(1)
 
@@ -372,6 +372,13 @@ def main():
         default=50,
         help="Maximum number of connected components to keep. Default is 50. Set to 0 to skip post-processing.",
     )
+    parser.add_argument(
+        "--gs_type",
+        type=str,
+        choices=["3dgs", "2dgs"],
+        default="3dgs",
+        help="Type of Gaussian splats saved in the checkpoint. Use '3dgs' for 3D Gaussians or '2dgs' for 2D Gaussians.",
+    )
 
     args = parser.parse_args()
 
@@ -450,25 +457,46 @@ def main():
             viewmats = torch.linalg.inv(camtoworlds)
 
             # Render RGB + Expected Depth (ED)
-            renders, _, _ = rasterization(
-                means=means,
-                quats=quats,
-                scales=scales,
-                opacities=opacities,
-                colors=colors,
-                viewmats=viewmats,
-                Ks=Ks,
-                width=width,
-                height=height,
-                sh_degree=sh_degree,
-                render_mode="RGB+ED",  # Request RGB and Depth
-                packed=False,
-            )
+            if args.gs_type == "3dgs":
+                renders, _, _ = rasterization(
+                    means=means,
+                    quats=quats,
+                    scales=scales,
+                    opacities=opacities,
+                    colors=colors,
+                    viewmats=viewmats,
+                    Ks=Ks,
+                    width=width,
+                    height=height,
+                    sh_degree=sh_degree,
+                    render_mode="RGB+ED",  # Request RGB and Depth
+                    packed=False,
+                )
 
-            # Separate color and depth
-            # renders shape is [1, H, W, 4] (RGB+D)
-            color = renders[..., 0:3].clamp(0.0, 1.0)  # [1, H, W, 3]
-            depth = renders[..., 3:4]  # [1, H, W, 1]
+                # Separate color and depth
+                # renders shape is [1, H, W, 4] (RGB+D)
+                color = renders[..., 0:3].clamp(0.0, 1.0)  # [1, H, W, 3]
+                depth = renders[..., 3:4]  # [1, H, W, 1]
+            else:
+                (render_colors, _, _, _, _, _,) = rasterization_2dgs(
+                    means=means,
+                    quats=quats,
+                    scales=scales,
+                    opacities=opacities,
+                    colors=colors,
+                    viewmats=viewmats,
+                    Ks=Ks,
+                    width=width,
+                    height=height,
+                    sh_degree=sh_degree,
+                    render_mode="RGB+ED",
+                    depth_mode="median",
+                    packed=False,
+                )
+
+                # 2DGS returns RGB channels plus median depth in the last channel
+                color = render_colors[..., 0:3].clamp(0.0, 1.0)
+                depth = render_colors[..., -1:]
 
             # Store tensors in lists (we keep the batch_size=1 dimension)
             # Move them back to CPU to free up GPU memory
