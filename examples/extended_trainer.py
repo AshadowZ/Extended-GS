@@ -162,7 +162,7 @@ class Config:
 
     ### depth and normal regularization
     """Specifies applying depth regularization once every N iterations"""
-    depth_reg_every_n: int = 4
+    depth_reg_every_n: int = 6
     """If not None, the code will look for a folder named 'depth_dir_name' at the same level as
     the 'images' directory, load the dense depth maps from it, and use their depth values 
     for regularization.
@@ -174,7 +174,7 @@ class Config:
     depth_loss_activation_step: int = 1000
 
     """Specifies applying normal regularization once every N iterations"""
-    normal_reg_every_n: int = 8
+    normal_reg_every_n: int = 12
     """If not None, the code will look for a folder named 'normal_dir_name' at the same level as
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.

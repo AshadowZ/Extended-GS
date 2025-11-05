@@ -117,7 +117,7 @@ class Config:
     # Refine GSs every this steps
     refine_every: int = 100
     # Maximum number of GSs allowed when using ImprovedStrategy
-    budget: int = 2_000_000
+    budget: int = 3_000_000
 
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
@@ -159,18 +159,18 @@ class Config:
     dist_start_iter: int = 3_000
 
     # Apply depth regularization once every N training iterations
-    depth_reg_every_n: int = 4
+    depth_reg_every_n: int = 8
     # Name of the directory containing depth priors relative to each scene
-    depth_dir_name: Optional[str] = "pi3_depth"
+    depth_dir_name: Optional[str] = "pi3_depth" # "pi3_depth"
     # Weight assigned to the depth prior loss term
-    depth_loss_weight: float = 0.3
+    depth_loss_weight: float = 0.2
     # Iteration after which depth regularization becomes active
     depth_loss_activation_step: int = 1_000
 
     # Apply normal regularization once every N training iterations
-    normal_reg_every_n: int = 8
+    normal_reg_every_n: int = 16
     # Name of the directory containing normal priors relative to each scene
-    normal_dir_name: Optional[str] = "moge_normal"
+    normal_dir_name: Optional[str] = "moge_normal" # "moge_normal"
     # Weight assigned to the rendered normal loss term
     render_normal_loss_weight: float = 0.1
     # Iteration after which rendered normal regularization becomes active
