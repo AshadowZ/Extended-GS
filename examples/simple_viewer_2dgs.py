@@ -32,7 +32,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
         if uses_sh is None:
             uses_sh = has_sh
         else:
-            assert uses_sh == has_sh, "All checkpoints must either use SH or direct colors consistently."
+            assert (
+                uses_sh == has_sh
+            ), "All checkpoints must either use SH or direct colors consistently."
 
         if has_sh:
             sh0 = ckpt["sh0"]
@@ -121,7 +123,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
             if render_tab_state.inverse:
                 depth_norm = 1 - depth_norm
             renders = (
-                apply_float_colormap(depth_norm.unsqueeze(-1), render_tab_state.colormap)
+                apply_float_colormap(
+                    depth_norm.unsqueeze(-1), render_tab_state.colormap
+                )
                 .cpu()
                 .numpy()
             )
@@ -138,7 +142,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
             if render_tab_state.inverse:
                 depth_norm = 1 - depth_norm
             renders = (
-                apply_float_colormap(depth_norm.unsqueeze(-1), render_tab_state.colormap)
+                apply_float_colormap(
+                    depth_norm.unsqueeze(-1), render_tab_state.colormap
+                )
                 .cpu()
                 .numpy()
             )

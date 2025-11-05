@@ -161,7 +161,7 @@ class Config:
     # Apply depth regularization once every N training iterations
     depth_reg_every_n: int = 8
     # Name of the directory containing depth priors relative to each scene
-    depth_dir_name: Optional[str] = "pi3_depth" # "pi3_depth"
+    depth_dir_name: Optional[str] = "pi3_depth"  # "pi3_depth"
     # Weight assigned to the depth prior loss term
     depth_loss_weight: float = 0.2
     # Iteration after which depth regularization becomes active
@@ -170,7 +170,7 @@ class Config:
     # Apply normal regularization once every N training iterations
     normal_reg_every_n: int = 16
     # Name of the directory containing normal priors relative to each scene
-    normal_dir_name: Optional[str] = "moge_normal" # "moge_normal"
+    normal_dir_name: Optional[str] = "moge_normal"  # "moge_normal"
     # Weight assigned to the rendered normal loss term
     render_normal_loss_weight: float = 0.1
     # Iteration after which rendered normal regularization becomes active
@@ -213,9 +213,7 @@ class Config:
         self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
         if self.refine_scale2d_stop_iter > 0:
-            self.refine_scale2d_stop_iter = int(
-                self.refine_scale2d_stop_iter * factor
-            )
+            self.refine_scale2d_stop_iter = int(self.refine_scale2d_stop_iter * factor)
         self.depth_loss_activation_step = int(self.depth_loss_activation_step * factor)
         self.render_normal_loss_activation_step = int(
             self.render_normal_loss_activation_step * factor
@@ -689,7 +687,9 @@ class Runner:
                 and step % cfg.normal_reg_every_n == 0
             )
 
-            need_depth = need_depth_prior or need_normal_prior or need_consistency_normal
+            need_depth = (
+                need_depth_prior or need_normal_prior or need_consistency_normal
+            )
             render_mode = "RGB+ED" if need_depth else "RGB"
 
             (
@@ -1194,9 +1194,13 @@ class Runner:
             depth_norm = torch.clip(depth_norm, 0, 1)
             if render_tab_state.inverse:
                 depth_norm = 1 - depth_norm
-            renders = apply_float_colormap(
-                depth_norm.unsqueeze(-1), render_tab_state.colormap
-            ).cpu().numpy()
+            renders = (
+                apply_float_colormap(
+                    depth_norm.unsqueeze(-1), render_tab_state.colormap
+                )
+                .cpu()
+                .numpy()
+            )
         elif render_tab_state.render_mode == "median_depth":
             depth = render_median[0, ..., 0]
             if render_tab_state.normalize_nearfar:
@@ -1209,12 +1213,16 @@ class Runner:
             depth_norm = torch.clip(depth_norm, 0, 1)
             if render_tab_state.inverse:
                 depth_norm = 1 - depth_norm
-            renders = apply_float_colormap(
-                depth_norm.unsqueeze(-1), render_tab_state.colormap
-            ).cpu().numpy()
+            renders = (
+                apply_float_colormap(
+                    depth_norm.unsqueeze(-1), render_tab_state.colormap
+                )
+                .cpu()
+                .numpy()
+            )
         elif render_tab_state.render_mode == "render_normal":
             render_normals = render_normals[0] * 0.5 + 0.5  # normalize to [0, 1]
-            render_normals = 1 - render_normals # for better vis
+            render_normals = 1 - render_normals  # for better vis
             renders = render_normals.cpu().numpy()
         elif render_tab_state.render_mode == "surf_normal":
             depth = render_colors[..., -1:]
@@ -1224,12 +1232,13 @@ class Runner:
             renders = surf_normals.cpu().numpy()
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas[0, ..., 0:1]
-            renders = apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
+            renders = (
+                apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
+            )
         else:
             render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
             renders = render_colors.cpu().numpy()
         return renders
-
 
     def compute_depth_loss(
         self, pred_depth: torch.Tensor, gt_depth: torch.Tensor
@@ -1261,9 +1270,10 @@ class Runner:
         diff = torch.where(valid_pix, pred_depth - gt_depth, 0.0)
         abs_diff = diff.abs()
 
-        per_image_loss = abs_diff.sum(dim=(1, 2, 3)) / valid_pix.sum(dim=(1, 2, 3)).clamp(min=1)
+        per_image_loss = abs_diff.sum(dim=(1, 2, 3)) / valid_pix.sum(
+            dim=(1, 2, 3)
+        ).clamp(min=1)
         return per_image_loss.mean()
-
 
     def compute_normal_loss(
         self,
