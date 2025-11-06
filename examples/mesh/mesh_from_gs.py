@@ -173,7 +173,7 @@ def create_tsdf_mesh(
     if voxel_length is None:
         voxel_length = med_dist / 192  # reference value
     if sdf_trunc is None:
-        sdf_trunc = voxel_length * 3.0
+        sdf_trunc = voxel_length * 5.0
 
     print(
         f"[TSDF] N={N}, med_camera_dist={med_dist:.3f} m, voxel_length={voxel_length:.6f} m, sdf_trunc={sdf_trunc:.6f} m"
