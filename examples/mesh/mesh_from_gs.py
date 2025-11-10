@@ -645,7 +645,26 @@ def main():
         print("\n--- Skipping mesh post-processing ---")
     # --- End of new logic ---
 
-    # 5.3 Save Mesh
+    # 5.3 Restore mesh to original (pre-normalization) coordinate system if needed
+    if args.normalize_world_space:
+        print("\n--- Restoring mesh to original COLMAP coordinate system ---")
+        try:
+            normalization_transform = getattr(parser, "transform", None)
+            if normalization_transform is None:
+                raise AttributeError("Parser does not expose a normalization transform.")
+            inv_transform = np.linalg.inv(normalization_transform).astype(np.float64)
+            mesh.transform(inv_transform)
+            print(
+                "[Denormalize] Applied inverse normalization transform "
+                f"(scale factor: {getattr(parser, 'scale', 'unknown')})."
+            )
+        except Exception as exc:
+            print(
+                f"[Warning] Failed to restore mesh to original coordinates: {exc}. "
+                "Saving normalized mesh instead."
+            )
+
+    # 5.4 Save Mesh
     # Ensure directory exists
     os.makedirs(output_directory, exist_ok=True)
 
