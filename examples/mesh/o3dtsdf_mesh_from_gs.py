@@ -511,7 +511,7 @@ def main():
                 color = renders[..., 0:3].clamp(0.0, 1.0)  # [1, H, W, 3]
                 depth = renders[..., 3:4]  # [1, H, W, 1]
             else:
-                (render_colors, _, _, _, _, _,) = rasterization_2dgs(
+                (render_colors, _, _, _, render_median, _,) = rasterization_2dgs(
                     means=means,
                     quats=quats,
                     scales=scales,
@@ -523,13 +523,12 @@ def main():
                     height=height,
                     sh_degree=sh_degree,
                     render_mode="RGB+ED",
-                    depth_mode="median",
                     packed=False,
                 )
 
                 # 2DGS returns RGB channels plus median depth in the last channel
                 color = render_colors[..., 0:3].clamp(0.0, 1.0)
-                depth = render_colors[..., -1:]
+                depth = render_median
 
             # Cache RGB/Depth to disk to avoid holding every frame in memory
             color_np = (
