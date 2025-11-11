@@ -11,6 +11,7 @@ import numpy as np
 import open3d as o3d
 import cv2
 import copy  # <-- Added import for post-processing
+import shutil
 
 # --- Add parent directory to Python path ---
 # Get the directory of the current script
@@ -129,6 +130,22 @@ def to_numpy(tensor: torch.Tensor | np.ndarray) -> np.ndarray:
         raise TypeError(f"Expected torch.Tensor or np.ndarray, got {type(tensor)}")
 
 
+class DiskNpyArray:
+    """
+    Lightweight wrapper that exposes a list of .npy files like an array,
+    loading data on-demand to avoid holding everything in memory.
+    """
+
+    def __init__(self, paths: List[str]):
+        self.paths = paths
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx):
+        return np.load(self.paths[idx])
+
+
 def get_med_dist_between_poses(poses):
     from scipy.spatial.distance import pdist
 
@@ -194,7 +211,11 @@ def create_tsdf_mesh(
 
     for i in tqdm.tqdm(range(N), desc="TSDF Integration"):
         depth = depths_np[i].astype(np.float32)  # HxW
-        color_float = colors_np[i]  # HxW, 3, float [0,1]
+        color_data = colors_np[i]
+        if color_data.dtype == np.uint8:
+            color_float = color_data.astype(np.float32) / 255.0
+        else:
+            color_float = color_data.astype(np.float32)  # HxW, 3, float [0,1]
         h, w = hws[i]  # colmap's (height, width)
 
         # Ensure dimensions match
@@ -382,6 +403,15 @@ def main():
 
     args = parser.parse_args()
 
+    # Prepare output directory and cache path (clear cache each run)
+    output_directory = args.output_dir if args.output_dir else args.data_dir
+    os.makedirs(output_directory, exist_ok=True)
+    cache_dir = os.path.join(output_directory, "cache")
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+    print(f"[Cache] Writing intermediate RGB/Depth to: {cache_dir}")
+
     # 1. Auto-select device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -424,12 +454,16 @@ def main():
     # 4. Render loop (Logic 2, Part 2)
     print("\nStarting render of 'trainset' (RGB+Depth)...")
 
-    # These lists will store your render results
-    all_colors = []
-    all_depths = []
+    # These lists will store metadata and cached file paths
+    color_cache_paths = []
+    depth_cache_paths = []
     all_camtoworlds = []  # New: for TSDF
     all_Ks = []  # New: for TSDF
     all_hws = []  # New: for TSDF
+    sample_color_shape = None
+    sample_depth_shape = None
+    color_cache_dtype = "uint8"
+    depth_cache_dtype = "float16"
 
     total_rendered = 0
 
@@ -478,7 +512,7 @@ def main():
                 color = renders[..., 0:3].clamp(0.0, 1.0)  # [1, H, W, 3]
                 depth = renders[..., 3:4]  # [1, H, W, 1]
             else:
-                (render_colors, _, _, _, _, _,) = rasterization_2dgs(
+                (render_colors, _, _, _, render_median, _,) = rasterization_2dgs(
                     means=means,
                     quats=quats,
                     scales=scales,
@@ -490,18 +524,32 @@ def main():
                     height=height,
                     sh_degree=sh_degree,
                     render_mode="RGB+ED",
-                    depth_mode="median",
                     packed=False,
                 )
 
                 # 2DGS returns RGB channels plus median depth in the last channel
                 color = render_colors[..., 0:3].clamp(0.0, 1.0)
-                depth = render_colors[..., -1:]
+                depth = render_median
 
-            # Store tensors in lists (we keep the batch_size=1 dimension)
-            # Move them back to CPU to free up GPU memory
-            all_colors.append(color.cpu())
-            all_depths.append(depth.cpu())
+            # Cache RGB/Depth to disk to avoid holding every frame in memory
+            color_np = (
+                (color.squeeze(0).cpu().numpy() * 255.0)
+                .round()
+                .clip(0, 255)
+                .astype(np.uint8)
+            )
+            depth_np = depth.squeeze(0).squeeze(-1).cpu().numpy().astype(np.float16)
+            if sample_color_shape is None:
+                sample_color_shape = color_np.shape
+            if sample_depth_shape is None:
+                sample_depth_shape = depth_np.shape
+            cache_idx = total_rendered
+            color_path = os.path.join(cache_dir, f"color_{cache_idx:06d}.npy")
+            depth_path = os.path.join(cache_dir, f"depth_{cache_idx:06d}.npy")
+            np.save(color_path, color_np)
+            np.save(depth_path, depth_np)
+            color_cache_paths.append(color_path)
+            depth_cache_paths.append(depth_path)
             # --- New: Save camera parameters ---
             all_camtoworlds.append(camtoworlds.cpu())
             all_Ks.append(Ks.cpu())
@@ -519,14 +567,22 @@ def main():
     print(
         f"Rendered {total_rendered} / {len(trainset)} total images (interval {args.interval})."
     )
-    if len(all_colors) > 0:
-        print(f"'all_colors' list contains {len(all_colors)} tensors.")
-        print(f"  - Shape of first color tensor: {all_colors[0].shape}")
-        print(f"'all_depths' list contains {len(all_depths)} tensors.")
-        print(f"  - Shape of first depth tensor: {all_depths[0].shape}")
-        print(
-            "\nVariables 'all_colors' and 'all_depths' now contain all render results."
-        )
+    if total_rendered > 0:
+        print(f"Cached {total_rendered} rendered frames to disk under '{cache_dir}'.")
+        if sample_color_shape is not None:
+            print(
+                f"  - Sample color tensor shape (saved): {sample_color_shape} [{color_cache_dtype}]"
+            )
+        if sample_depth_shape is not None:
+            print(
+                f"  - Sample depth tensor shape (saved): {sample_depth_shape} [{depth_cache_dtype}]"
+            )
+
+        # Release 3DGS parameter tensors to free GPU memory before TSDF
+        del means, quats, scales, opacities, colors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("[Memory] Released Gaussian parameter tensors and cleared CUDA cache.")
 
     else:
         print("No images rendered, skipping TSDF reconstruction.")
@@ -538,13 +594,9 @@ def main():
     # 5.1 Prepare data (Convert from Tensor list to Numpy array)
     print("Preparing data for TSDF reconstruction...")
 
-    # 1. Depths: List[Tensor[1,H,W,1]] -> Array[N,H,W]
-    depths_tensor = torch.cat(all_depths, dim=0).squeeze(3)  # [N, H, W]
-    depths_np = depths_tensor.numpy()
-
-    # 2. Colors: List[Tensor[1,H,W,3]] -> Array[N,H,W,3] (float 0-1)
-    colors_tensor = torch.cat(all_colors, dim=0)  # [N, H, W, 3]
-    colors_np = colors_tensor.numpy()
+    # 1. Depths/Colors: use disk-backed arrays so TSDF loads per frame
+    depths_np = DiskNpyArray(depth_cache_paths)
+    colors_np = DiskNpyArray(color_cache_paths)
 
     # 3. Intrinsics: List[Tensor[1,3,3]] -> Array[N,3,3]
     ixts_tensor = torch.cat(all_Ks, dim=0)  # [N, 3, 3]
@@ -558,8 +610,12 @@ def main():
     hws_np = np.array(all_hws)
 
     print(
-        f"Data shapes: depths={depths_np.shape}, colors={colors_np.shape}, ixts={ixts_np.shape}, camtoworlds={camtoworlds_np.shape}, hws={hws_np.shape}"
+        f"Data sources: frames={len(depths_np)}, ixts={ixts_np.shape}, camtoworlds={camtoworlds_np.shape}, hws={hws_np.shape}"
     )
+    if sample_color_shape is not None and sample_depth_shape is not None:
+        print(
+            f"  - Cached sample shapes -> color: {sample_color_shape} [{color_cache_dtype}], depth: {sample_depth_shape} [{depth_cache_dtype}]"
+        )
 
     # 5.2 Call TSDF reconstruction
     mesh = create_tsdf_mesh(
@@ -585,13 +641,28 @@ def main():
         print("\n--- Skipping mesh post-processing ---")
     # --- End of new logic ---
 
-    # 5.3 Save Mesh
-    if args.output_dir:
-        output_directory = args.output_dir
-    else:
-        # Default save to data_dir
-        output_directory = args.data_dir
+    # 5.3 Restore mesh to original (pre-normalization) coordinate system if needed
+    if args.normalize_world_space:
+        print("\n--- Restoring mesh to original COLMAP coordinate system ---")
+        try:
+            normalization_transform = getattr(parser, "transform", None)
+            if normalization_transform is None:
+                raise AttributeError(
+                    "Parser does not expose a normalization transform."
+                )
+            inv_transform = np.linalg.inv(normalization_transform).astype(np.float64)
+            mesh.transform(inv_transform)
+            print(
+                "[Denormalize] Applied inverse normalization transform "
+                f"(scale factor: {getattr(parser, 'scale', 'unknown')})."
+            )
+        except Exception as exc:
+            print(
+                f"[Warning] Failed to restore mesh to original coordinates: {exc}. "
+                "Saving normalized mesh instead."
+            )
 
+    # 5.4 Save Mesh
     # Ensure directory exists
     os.makedirs(output_directory, exist_ok=True)
 

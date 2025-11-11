@@ -1339,7 +1339,6 @@ def rasterization_2dgs(
     sparse_grad: bool = False,
     absgrad: bool = False,
     distloss: bool = False,
-    depth_mode: Literal["expected", "median"] = "expected",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
@@ -1386,7 +1385,6 @@ def rasterization_2dgs(
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
         distloss: If true, use distortion regularization to get better geometry detail.
-        depth_mode: render depth mode. Choose from expected depth and median depth.
 
     Returns:
         A tuple:
