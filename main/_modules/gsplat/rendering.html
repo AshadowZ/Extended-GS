@@ -1650,7 +1650,6 @@
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">distloss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">depth_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;expected&quot;</span><span class="p">,</span> <span class="s2">&quot;median&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;expected&quot;</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).</span>
 
@@ -1697,7 +1696,6 @@
 <span class="sd">            If the required rendering channels are larger than this value, the rendering</span>
 <span class="sd">            will be done looply in chunks.</span>
 <span class="sd">        distloss: If true, use distortion regularization to get better geometry detail.</span>
-<span class="sd">        depth_mode: render depth mode. Choose from expected depth and median depth.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple:</span>
