@@ -129,6 +129,7 @@ def to_numpy(tensor: torch.Tensor | np.ndarray) -> np.ndarray:
     else:
         raise TypeError(f"Expected torch.Tensor or np.ndarray, got {type(tensor)}")
 
+
 class DiskNpyArray:
     """
     Lightweight wrapper that exposes a list of .npy files like an array,
@@ -537,9 +538,7 @@ def main():
                 .clip(0, 255)
                 .astype(np.uint8)
             )
-            depth_np = (
-                depth.squeeze(0).squeeze(-1).cpu().numpy().astype(np.float16)
-            )
+            depth_np = depth.squeeze(0).squeeze(-1).cpu().numpy().astype(np.float16)
             if sample_color_shape is None:
                 sample_color_shape = color_np.shape
             if sample_depth_shape is None:
@@ -569,9 +568,7 @@ def main():
         f"Rendered {total_rendered} / {len(trainset)} total images (interval {args.interval})."
     )
     if total_rendered > 0:
-        print(
-            f"Cached {total_rendered} rendered frames to disk under '{cache_dir}'."
-        )
+        print(f"Cached {total_rendered} rendered frames to disk under '{cache_dir}'.")
         if sample_color_shape is not None:
             print(
                 f"  - Sample color tensor shape (saved): {sample_color_shape} [{color_cache_dtype}]"
@@ -650,7 +647,9 @@ def main():
         try:
             normalization_transform = getattr(parser, "transform", None)
             if normalization_transform is None:
-                raise AttributeError("Parser does not expose a normalization transform.")
+                raise AttributeError(
+                    "Parser does not expose a normalization transform."
+                )
             inv_transform = np.linalg.inv(normalization_transform).astype(np.float64)
             mesh.transform(inv_transform)
             print(
