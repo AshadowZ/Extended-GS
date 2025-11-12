@@ -167,7 +167,7 @@ class Config:
     the 'images' directory, load the dense depth maps from it, and use their depth values 
     for regularization.
     """
-    depth_dir_name: Optional[str] = "pi3_depth"  # "pi3_depth"
+    depth_dir_name: Optional[str] = None  # "pi3_depth"
     """Weight of the depth loss"""
     depth_loss_weight: float = 0.3
     """Starting iteration for depth regularization"""
@@ -179,7 +179,7 @@ class Config:
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.
     """
-    normal_dir_name: Optional[str] = "moge_normal"  # "moge_normal"
+    normal_dir_name: Optional[str] = None  # "moge_normal"
     """Weight of the render_normal_loss"""
     render_normal_loss_weight: float = 0.1
     """Starting iteration for render_normal regularization"""
@@ -1523,7 +1523,7 @@ if __name__ == "__main__":
                     refine_every=100,
                     absgrad=True,
                     verbose=True,
-                    budget=3000000,
+                    budget=2000000,
                 ),
             ),
         ),
