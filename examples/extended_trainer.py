@@ -673,6 +673,29 @@ class Runner:
             image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
 
+            # Optional priors
+            depth_prior = None
+            raw_depth_prior = data.get("depth_prior")
+            if (
+                raw_depth_prior is not None
+                and isinstance(raw_depth_prior, torch.Tensor)
+                and raw_depth_prior.numel() > 0
+            ):
+                depth_prior = raw_depth_prior.to(device)
+                if depth_prior.dim() == 3:
+                    depth_prior = depth_prior.unsqueeze(0)
+
+            normal_prior = None
+            raw_normal_prior = data.get("normal_prior")
+            if (
+                raw_normal_prior is not None
+                and isinstance(raw_normal_prior, torch.Tensor)
+                and raw_normal_prior.numel() > 0
+            ):
+                normal_prior = raw_normal_prior.to(device)
+                if normal_prior.dim() == 3:
+                    normal_prior = normal_prior.unsqueeze(0)
+
             height, width = pixels.shape[1:3]
 
             if cfg.pose_noise:
@@ -685,14 +708,15 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # Determine required render mode based on active regularizations
-            need_depth = (
-                cfg.depth_dir_name is not None
+            need_depth_prior = (
+                depth_prior is not None
                 and cfg.depth_loss_weight > 0.0
                 and step >= cfg.depth_loss_activation_step
                 and step % cfg.depth_reg_every_n == 0
             )
-            need_normal = (
-                cfg.normal_dir_name is not None
+            need_normal_prior = (
+                normal_prior is not None
+                and step % cfg.normal_reg_every_n == 0
                 and (
                     (
                         cfg.surf_normal_loss_weight > 0
@@ -703,13 +727,22 @@ class Runner:
                         and step >= cfg.render_normal_loss_activation_step
                     )
                 )
+            )
+            need_consistency_normal = (
+                cfg.consistency_normal_loss_weight > 0.0
+                and step >= cfg.consistency_normal_loss_activation_step
                 and step % cfg.normal_reg_every_n == 0
             )
 
+            need_depth_for_render = (
+                need_depth_prior or need_normal_prior or need_consistency_normal
+            )
+            need_normals_for_render = need_normal_prior or need_consistency_normal
+
             # Select render mode
-            if need_normal:
+            if need_normals_for_render:
                 render_mode = "RGB+ED+N"
-            elif need_depth:
+            elif need_depth_for_render:
                 render_mode = "RGB+ED"
             else:
                 render_mode = "RGB"
@@ -781,14 +814,34 @@ class Runner:
                 loss += tvloss
 
             # depth loss
-            if need_depth:
-                depths_prior = data["depth_prior"].to(device)  # [B,H,W,1]
-                depth_loss = self.compute_depth_loss(depths, depths_prior)
+            if need_depth_prior:
+                depth_loss = self.compute_depth_loss(depths, depth_prior)
                 loss += cfg.depth_loss_weight * depth_loss
 
+            consistency_norm_loss = None
+            surf_normal_loss = None
+            render_normal_loss = None
+
+            surf_normals_from_depth = None
+            if (need_consistency_normal or need_normal_prior) and depths is not None:
+                surf_normals_from_depth = get_implied_normal_from_depth(depths, Ks)
+
+            # consistency normal loss
+            if (
+                need_consistency_normal
+                and surf_normals_from_depth is not None
+                and render_normals is not None
+            ):
+                mask_consistency = torch.ones_like(alphas)
+                consistency_norm_loss = self.compute_normal_loss(
+                    F.normalize(render_normals, dim=-1),
+                    surf_normals_from_depth,
+                    mask_consistency,
+                )
+                loss += cfg.consistency_normal_loss_weight * consistency_norm_loss
+
             # normal loss
-            if need_normal:
-                normals_prior = data["normal_prior"].to(device)  # [B,H,W,3]
+            if need_normal_prior and surf_normals_from_depth is not None:
                 mask = torch.ones_like(depths).float()  # [B,H,W,1]
 
                 # Surface normal loss (from depth)
@@ -796,9 +849,8 @@ class Runner:
                     cfg.surf_normal_loss_weight > 0
                     and step >= cfg.surf_normal_loss_activation_step
                 ):
-                    surf_normals = get_implied_normal_from_depth(depths, Ks)
                     surf_normal_loss = self.compute_normal_loss(
-                        surf_normals, normals_prior, mask
+                        surf_normals_from_depth, normal_prior, mask
                     )
                     loss += cfg.surf_normal_loss_weight * surf_normal_loss
 
@@ -806,9 +858,10 @@ class Runner:
                 if (
                     cfg.render_normal_loss_weight > 0
                     and step >= cfg.render_normal_loss_activation_step
+                    and render_normals is not None
                 ):
                     render_normal_loss = self.compute_normal_loss(
-                        render_normals, normals_prior, mask
+                        render_normals, normal_prior, mask
                     )
                     loss += cfg.render_normal_loss_weight * render_normal_loss
 
@@ -850,6 +903,30 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.use_bilateral_grid:
                     self.writer.add_scalar("train/tvloss", tvloss.item(), step)
+                if need_depth_prior:
+                    self.writer.add_scalar("train/depthloss", depth_loss.item(), step)
+                if (
+                    need_normal_prior
+                    and cfg.surf_normal_loss_weight > 0
+                    and surf_normal_loss is not None
+                ):
+                    self.writer.add_scalar(
+                        "train/surf_normalloss", surf_normal_loss.item(), step
+                    )
+                if (
+                    need_normal_prior
+                    and cfg.render_normal_loss_weight > 0
+                    and render_normal_loss is not None
+                ):
+                    self.writer.add_scalar(
+                        "train/render_normalloss", render_normal_loss.item(), step
+                    )
+                if need_consistency_normal and consistency_norm_loss is not None:
+                    self.writer.add_scalar(
+                        "train/consistency_normalloss",
+                        consistency_norm_loss.item(),
+                        step,
+                    )
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
