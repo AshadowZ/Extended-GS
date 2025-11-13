@@ -81,7 +81,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [30_000])
     # Whether to save ply file (storage size can be large)
@@ -118,9 +118,9 @@ class Config:
     # Verbosity for densification logs
     strategy_verbose: bool = True
     # Densification hyper-parameters (see notes below; shared unless marked otherwise)
-    prune_opa: float = 0.005
+    prune_opa: float = 0.05
     grow_grad2d: float = 0.0002
-    prune_scale3d: float = 0.1
+    prune_scale3d: float = 0.05
     prune_scale2d: float = 0.15
     refine_scale2d_stop_iter: int = 4000
     refine_start_iter: int = 500
@@ -190,19 +190,19 @@ class Config:
 
     ### depth and normal regularization
     """Specifies applying depth regularization once every N iterations"""
-    depth_reg_every_n: int = 6
+    depth_reg_every_n: int = 4
     """If not None, the code will look for a folder named 'depth_dir_name' at the same level as
     the 'images' directory, load the dense depth maps from it, and use their depth values 
     for regularization.
     """
-    depth_dir_name: Optional[str] = None  # "pi3_depth"
+    depth_dir_name: Optional[str] = "moge_depth"  # "pi3_depth"
     """Weight of the depth loss"""
     depth_loss_weight: float = 0.3
     """Starting iteration for depth regularization"""
     depth_loss_activation_step: int = 1000
 
     """Specifies applying normal regularization once every N iterations"""
-    normal_reg_every_n: int = 12
+    normal_reg_every_n: int = 8
     """If not None, the code will look for a folder named 'normal_dir_name' at the same level as
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.

@@ -187,7 +187,7 @@ def long_axis_split(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
-    opacity_reduction: float = 0.6,
+    opacity_reduction: float = 1.0,
 ):
     """Inplace split the Gaussian with the given mask.
 
