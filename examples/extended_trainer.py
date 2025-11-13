@@ -179,7 +179,7 @@ class Config:
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.
     """
-    normal_dir_name: Optional[str] = None  # "moge_normal"
+    normal_dir_name: Optional[str] = "moge_normal"  # "moge_normal"
     """Weight of the render_normal_loss"""
     render_normal_loss_weight: float = 0.1
     """Starting iteration for render_normal regularization"""
@@ -686,6 +686,7 @@ class Runner:
                     depth_prior = depth_prior.unsqueeze(0)
 
             normal_prior = None
+            normal_prior_mask = None
             raw_normal_prior = data.get("normal_prior")
             if (
                 raw_normal_prior is not None
@@ -695,6 +696,11 @@ class Runner:
                 normal_prior = raw_normal_prior.to(device)
                 if normal_prior.dim() == 3:
                     normal_prior = normal_prior.unsqueeze(0)
+                ones_like = torch.ones_like(normal_prior)
+                is_invalid = torch.isclose(normal_prior, ones_like).all(
+                    dim=-1, keepdim=True
+                )
+                normal_prior_mask = (~is_invalid).float()
 
             height, width = pixels.shape[1:3]
 
@@ -843,6 +849,8 @@ class Runner:
             # normal loss
             if need_normal_prior and surf_normals_from_depth is not None:
                 mask = torch.ones_like(depths).float()  # [B,H,W,1]
+                if normal_prior_mask is not None:
+                    mask = mask * normal_prior_mask
 
                 # Surface normal loss (from depth)
                 if (
