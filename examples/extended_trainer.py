@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -112,9 +113,36 @@ class Config:
     # Far plane clipping distance
     far_plane: float = 1e10
 
-    # Strategy for GS densification
+    # Densification strategy selection (default / mcmc / improved)
+    strategy_type: Literal["default", "mcmc", "improved"] = "default"
+    # Verbosity for densification logs
+    strategy_verbose: bool = True
+    # Densification hyper-parameters (see notes below; shared unless marked otherwise)
+    prune_opa: float = 0.005
+    grow_grad2d: float = 0.0002
+    prune_scale3d: float = 0.1
+    prune_scale2d: float = 0.15
+    refine_scale2d_stop_iter: int = 4000
+    refine_start_iter: int = 500
+    refine_stop_iter: int = 20000
+    reset_every: int = 3000
+    refine_every: int = 100
+    absgrad: bool = True
+    # DefaultStrategy-only hyper-parameters
+    grow_scale3d: float = 0.01
+    grow_scale2d: float = 0.05
+    pause_refine_after_reset: int = 0
+    revised_opacity: bool = False
+    # ImprovedStrategy-only hyper-parameter
+    budget: int = 2_000_000
+    # MCMCStrategy-only hyper-parameters
+    mcmc_cap_max: int = 1_000_000
+    mcmc_noise_lr: float = 5e5
+    mcmc_min_opacity: float = 0.005
+
+    # Strategy instance (constructed from the type/params above)
     strategy: Union[DefaultStrategy, MCMCStrategy, ImprovedStrategy] = field(
-        default_factory=DefaultStrategy
+        init=False, repr=False
     )
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
@@ -229,6 +257,9 @@ class Config:
     with_ut: bool = False
     with_eval3d: bool = False
 
+    def __post_init__(self):
+        self.rebuild_strategy()
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -253,6 +284,53 @@ class Config:
             strategy.refine_every = int(strategy.refine_every * factor)
         else:
             assert_never(strategy)
+
+    def rebuild_strategy(self):
+        if self.strategy_type == "default":
+            self.strategy = DefaultStrategy(
+                prune_opa=self.prune_opa,
+                grow_grad2d=self.grow_grad2d,
+                grow_scale3d=self.grow_scale3d,
+                grow_scale2d=self.grow_scale2d,
+                prune_scale3d=self.prune_scale3d,
+                prune_scale2d=self.prune_scale2d,
+                refine_scale2d_stop_iter=self.refine_scale2d_stop_iter,
+                refine_start_iter=self.refine_start_iter,
+                refine_stop_iter=self.refine_stop_iter,
+                reset_every=self.reset_every,
+                refine_every=self.refine_every,
+                pause_refine_after_reset=self.pause_refine_after_reset,
+                absgrad=self.absgrad,
+                revised_opacity=self.revised_opacity,
+                verbose=self.strategy_verbose,
+            )
+        elif self.strategy_type == "mcmc":
+            self.strategy = MCMCStrategy(
+                cap_max=self.mcmc_cap_max,
+                noise_lr=self.mcmc_noise_lr,
+                refine_start_iter=self.refine_start_iter,
+                refine_stop_iter=self.refine_stop_iter,
+                refine_every=self.refine_every,
+                min_opacity=self.mcmc_min_opacity,
+                verbose=self.strategy_verbose,
+            )
+        elif self.strategy_type == "improved":
+            self.strategy = ImprovedStrategy(
+                prune_opa=self.prune_opa,
+                grow_grad2d=self.grow_grad2d,
+                prune_scale3d=self.prune_scale3d,
+                prune_scale2d=self.prune_scale2d,
+                refine_scale2d_stop_iter=self.refine_scale2d_stop_iter,
+                refine_start_iter=self.refine_start_iter,
+                refine_stop_iter=self.refine_stop_iter,
+                reset_every=self.reset_every,
+                refine_every=self.refine_every,
+                absgrad=self.absgrad,
+                verbose=self.strategy_verbose,
+                budget=self.budget,
+            )
+        else:
+            assert_never(self.strategy_type)
 
 
 def create_splats_with_optimizers(
@@ -1566,54 +1644,55 @@ if __name__ == "__main__":
     Usage:
 
     ```bash
-    # Single GPU training
-    CUDA_VISIBLE_DEVICES=9 python -m examples.simple_trainer default
+    # Single GPU training using the default preset + default densification.
+    CUDA_VISIBLE_DEVICES=9 python -m examples.extended_trainer
 
-    # Distributed training on 4 GPUs: Effectively 4x batch size so run 4x less steps.
-    CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py default --steps_scaler 0.25
+    # Explicitly pick a preset and override the densification strategy from the CLI.
+    CUDA_VISIBLE_DEVICES=0 python -m examples.extended_trainer \
+        mcmc --steps_scaler 0.5 --strategy_type improved
+
+    # Distributed training on 4 GPUs: effectively 4× batch size so run 4× fewer steps.
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python -m examples.extended_trainer \
+        improved --steps_scaler 0.25 --strategy_type improved
+    ```
 
     """
 
-    # Config objects we can choose between.
-    # Each is a tuple of (CLI description, config object).
+    # Preset config factories we can choose between.
     configs = {
-        "default": (
-            "Gaussian splatting training using densification heuristics from the original paper.",
-            Config(
-                strategy=DefaultStrategy(verbose=True),
-            ),
+        "default": lambda: Config(),
+        "mcmc": lambda: Config(
+            strategy_type="mcmc",
+            init_opa=0.5,
+            init_scale=0.1,
+            opacity_reg=0.01,
+            scale_reg=0.01,
+            refine_stop_iter=25_000,
         ),
-        "mcmc": (
-            "Gaussian splatting training using densification from the paper '3D Gaussian Splatting as Markov Chain Monte Carlo'.",
-            Config(
-                init_opa=0.5,
-                init_scale=0.1,
-                opacity_reg=0.01,
-                scale_reg=0.01,
-                strategy=MCMCStrategy(verbose=True),
-            ),
-        ),
-        "improved": (
-            "Gaussian splatting training using improved strategy with budget-based importance sampling.",
-            Config(
-                strategy=ImprovedStrategy(
-                    prune_opa=0.005,
-                    grow_grad2d=0.0002,
-                    prune_scale3d=0.1,
-                    prune_scale2d=0.15,
-                    refine_scale2d_stop_iter=4000,
-                    refine_start_iter=500,
-                    refine_stop_iter=20000,
-                    reset_every=3000,
-                    refine_every=100,
-                    absgrad=True,
-                    verbose=True,
-                    budget=2000000,
-                ),
-            ),
+        "improved": lambda: Config(
+            strategy_type="improved",
+            absgrad=True,
+            refine_scale2d_stop_iter=4000,
+            refine_stop_iter=20_000,
+            budget=2_000_000,
         ),
     }
-    cfg = tyro.extras.overridable_config_cli(configs)
+
+    # Allow the first positional argument to pick a preset while still exposing the
+    # full dataclass-based help/flags for all remaining arguments.
+    cli_args = sys.argv[1:]
+    preset = "default"
+    if cli_args and not cli_args[0].startswith("-") and cli_args[0] in configs:
+        preset = cli_args[0]
+        cli_args = cli_args[1:]
+
+    default_cfg = configs[preset]()
+    cfg = tyro.cli(
+        Config,
+        args=cli_args,
+        default=default_cfg,
+    )
+    cfg.rebuild_strategy()
     cfg.adjust_steps(cfg.steps_scaler)
 
     # Import BilateralGrid and related functions based on configuration
