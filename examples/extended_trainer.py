@@ -120,7 +120,7 @@ class Config:
     # Densification hyper-parameters (see notes below; shared unless marked otherwise)
     prune_opa: float = 0.05
     grow_grad2d: float = 0.0002
-    prune_scale3d: float = 0.05
+    prune_scale3d: float = 0.1
     prune_scale2d: float = 0.15
     refine_scale2d_stop_iter: int = 4000
     refine_start_iter: int = 500
