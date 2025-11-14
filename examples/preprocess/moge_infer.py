@@ -35,7 +35,9 @@ def get_sparse_depth(points3d, ixt, ext, point3d_ids, h, w):
     sparse_points = points @ ext[:3, :3].T + ext[:3, 3]
     sparse_points = sparse_points @ ixt.T
     sparse_points[:, :2] /= sparse_points[:, 2:]
-    sparse_points = np.concatenate([sparse_points, errs[:, None], num_views[:, None]], axis=1)
+    sparse_points = np.concatenate(
+        [sparse_points, errs[:, None], num_views[:, None]], axis=1
+    )
 
     sdpt = np.zeros((h, w, 3), dtype=np.float32)
     for x, y, z, error, views in sparse_points:
@@ -143,7 +145,8 @@ def run_inference(
 
     image_dir = os.path.join(data_dir, image_dir_name)
     image_files = sorted(
-        f for f in os.listdir(image_dir)
+        f
+        for f in os.listdir(image_dir)
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     )
     if not image_files:
@@ -184,7 +187,9 @@ def run_inference(
                 filename_queue.task_done()
                 continue
 
-            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            img_rgb = (
+                cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            )
             img_rgb = np.ascontiguousarray(img_rgb)
             read_time = time.time() - read_start
             data_queue.put((fname, img_rgb, read_time))
@@ -212,20 +217,30 @@ def run_inference(
                 normal_uint8 = np.clip(normal_np * 255.0, 0, 255).astype(np.uint8)
 
                 if mask_np_raw is not None:
-                    mask_bool = mask_np_raw[:, :, None] if mask_np_raw.ndim == 2 else mask_np_raw
+                    mask_bool = (
+                        mask_np_raw[:, :, None]
+                        if mask_np_raw.ndim == 2
+                        else mask_np_raw
+                    )
                     mask_bool = np.broadcast_to(mask_bool, normal_uint8.shape)
                     normal_uint8 = normal_uint8.copy()
                     normal_uint8[~mask_bool] = 0
 
                 output_path = os.path.join(normal_output_dir, f"{base_name}.png")
-                success = cv2.imwrite(output_path, cv2.cvtColor(normal_uint8, cv2.COLOR_RGB2BGR))
+                success = cv2.imwrite(
+                    output_path, cv2.cvtColor(normal_uint8, cv2.COLOR_RGB2BGR)
+                )
                 if not success:
                     print(f"[WARN] 无法写入法向图 {output_path}")
 
             depth_mask_np = mask_np_raw.copy() if mask_np_raw is not None else None
             depth_np = depth_tensor.numpy() if depth_tensor is not None else None
 
-            if align_depth_with_colmap and depth_np is not None and colmap_meta is not None:
+            if (
+                align_depth_with_colmap
+                and depth_np is not None
+                and colmap_meta is not None
+            ):
                 entry = colmap_meta.get(image_name)
                 if entry is None and colmap_meta_norm is not None:
                     entry = colmap_meta_norm.get(normalize_image_key(image_name))
@@ -237,10 +252,14 @@ def run_inference(
             if entry is not None:
                 h, w = entry["hw"]
                 if depth_np.shape != (h, w):
-                    depth_np = cv2.resize(depth_np, (w, h), interpolation=cv2.INTER_NEAREST)
+                    depth_np = cv2.resize(
+                        depth_np, (w, h), interpolation=cv2.INTER_NEAREST
+                    )
                 if depth_mask_np is not None and depth_mask_np.shape != (h, w):
                     depth_mask_np = cv2.resize(
-                        depth_mask_np.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST
+                        depth_mask_np.astype(np.uint8),
+                        (w, h),
+                        interpolation=cv2.INTER_NEAREST,
                     ).astype(bool)
                 sdpt = get_sparse_depth(
                     colmap_points,
@@ -258,7 +277,9 @@ def run_inference(
                         d_colmap = sparse_depth[valid_sparse]
                         clip_mask = np.ones_like(d_colmap, dtype=bool)
                         if 0 <= colmap_clip_low < colmap_clip_high <= 100:
-                            lo, hi = np.percentile(d_colmap, [colmap_clip_low, colmap_clip_high])
+                            lo, hi = np.percentile(
+                                d_colmap, [colmap_clip_low, colmap_clip_high]
+                            )
                             if hi > lo:
                                 clip_mask = (d_colmap >= lo) & (d_colmap <= hi)
                         d_pred_clip = d_pred[clip_mask].reshape(-1, 1)
@@ -271,20 +292,32 @@ def run_inference(
                                 )
                                 ransac.fit(d_pred_clip, d_colmap_clip)
                                 coef = float(ransac.estimator_.coef_.ravel()[0])
-                                intercept = float(ransac.estimator_.intercept_.ravel()[0])
+                                intercept = float(
+                                    ransac.estimator_.intercept_.ravel()[0]
+                                )
                                 if verbose:
-                                    print(f"[COLMAP] {image_name}: depth = {coef:.6f} * pred + {intercept:.6f}")
+                                    print(
+                                        f"[COLMAP] {image_name}: depth = {coef:.6f} * pred + {intercept:.6f}"
+                                    )
                                 depth_np = depth_np * coef + intercept
                             except Exception as exc:
                                 print(f"[WARN] COLMAP 对齐失败 {image_name}: {exc}")
 
             if depth_np is not None and remove_depth_edge:
-                edge_mask = utils3d.numpy.depth_edge(depth_np, rtol=depth_edge_rtol, mask=depth_mask_np)
-                depth_mask_np = (~edge_mask) if depth_mask_np is None else (depth_mask_np & (~edge_mask))
+                edge_mask = utils3d.numpy.depth_edge(
+                    depth_np, rtol=depth_edge_rtol, mask=depth_mask_np
+                )
+                depth_mask_np = (
+                    (~edge_mask)
+                    if depth_mask_np is None
+                    else (depth_mask_np & (~edge_mask))
+                )
 
             if save_depth and depth_np is not None and depth_output_dir is not None:
                 depth_to_save = depth_np.astype(np.float32)
-                depth_to_save = np.nan_to_num(depth_to_save, nan=0.0, posinf=0.0, neginf=0.0)
+                depth_to_save = np.nan_to_num(
+                    depth_to_save, nan=0.0, posinf=0.0, neginf=0.0
+                )
                 if depth_mask_np is not None:
                     depth_to_save = depth_to_save.copy()
                     depth_to_save[~depth_mask_np] = 0.0
@@ -294,8 +327,16 @@ def run_inference(
                 except Exception as exc:
                     print(f"[WARN] 无法写入深度图 {depth_path}: {exc}")
 
-            if save_depth_vis and depth_np is not None and depth_vis_output_dir is not None:
-                valid_mask = depth_mask_np if depth_mask_np is not None else np.isfinite(depth_np)
+            if (
+                save_depth_vis
+                and depth_np is not None
+                and depth_vis_output_dir is not None
+            ):
+                valid_mask = (
+                    depth_mask_np
+                    if depth_mask_np is not None
+                    else np.isfinite(depth_np)
+                )
                 valid_values = depth_np[valid_mask]
 
                 if valid_values.size == 0:
@@ -308,14 +349,20 @@ def run_inference(
                     else:
                         depth_norm = (depth_np - vmin) / (vmax - vmin)
                         depth_norm = np.clip(depth_norm, 0.0, 1.0)
-                        depth_norm = np.nan_to_num(depth_norm, nan=0.0, posinf=0.0, neginf=0.0)
+                        depth_norm = np.nan_to_num(
+                            depth_norm, nan=0.0, posinf=0.0, neginf=0.0
+                        )
                         depth_norm = (depth_norm * 255.0).astype(np.uint8)
 
                 depth_norm = depth_norm.astype(np.uint8)
                 if depth_mask_np is not None:
                     depth_norm = depth_norm.copy()
                     depth_norm[~depth_mask_np] = 0
-                cmap = cv2.COLORMAP_TURBO if hasattr(cv2, "COLORMAP_TURBO") else cv2.COLORMAP_JET
+                cmap = (
+                    cv2.COLORMAP_TURBO
+                    if hasattr(cv2, "COLORMAP_TURBO")
+                    else cv2.COLORMAP_JET
+                )
                 depth_color = cv2.applyColorMap(depth_norm, cmap)
                 if depth_mask_np is not None:
                     depth_color = depth_color.copy()
@@ -400,7 +447,8 @@ def run_inference(
                 with stats_lock:
                     avg_save = (
                         save_stats["time"] / save_stats["count"]
-                        if save_stats["count"] > 0 else 0.0
+                        if save_stats["count"] > 0
+                        else 0.0
                     )
                 tqdm.write(
                     f"图像 {fname}: 读取 {read_time:.3f}s, 推理 {inference_time:.3f}s, "
@@ -431,7 +479,9 @@ def run_inference(
     print(f"总保存耗时: {total_save_time:.2f}秒")
     print(f"处理图像数量: {len(image_files)}张")
     if len(image_files) > 0:
-        total_avg = (total_read_time + total_inference_time + total_save_time) / len(image_files)
+        total_avg = (total_read_time + total_inference_time + total_save_time) / len(
+            image_files
+        )
         print(f"平均每张图像耗时: {total_avg:.2f}秒")
         print(f"平均推理耗时: {total_inference_time / len(image_files):.2f}秒")
         if save_stats["count"]:
