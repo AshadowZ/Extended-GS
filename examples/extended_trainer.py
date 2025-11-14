@@ -182,7 +182,7 @@ class Config:
     instead of max to min, as implemented in mvsanywhere/regsplatfacto. This modification
     has been found to work better at encouraging Gaussians to be disks.
     """
-    scale_reg: float = 0.1
+    scale_reg: float = 1.0
     """Threshold of ratio of Gaussian's max to median scale before applying regularization
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
     """
@@ -197,7 +197,7 @@ class Config:
     """
     depth_dir_name: Optional[str] = "moge_depth"  # "pi3_depth"
     """Weight of the depth loss"""
-    depth_loss_weight: float = 0.3
+    depth_loss_weight: float = 0.25
     """Starting iteration for depth regularization"""
     depth_loss_activation_step: int = 1000
 
@@ -1644,54 +1644,15 @@ if __name__ == "__main__":
     Usage:
 
     ```bash
-    # Single GPU training using the default preset + default densification.
-    CUDA_VISIBLE_DEVICES=9 python -m examples.extended_trainer
-
-    # Explicitly pick a preset and override the densification strategy from the CLI.
     CUDA_VISIBLE_DEVICES=0 python -m examples.extended_trainer \
-        mcmc --steps_scaler 0.5 --strategy_type improved
-
-    # Distributed training on 4 GPUs: effectively 4× batch size so run 4× fewer steps.
-    CUDA_VISIBLE_DEVICES=0,1,2,3 python -m examples.extended_trainer \
-        improved --steps_scaler 0.25 --strategy_type improved
+        --strategy_type improved \
+        --data_dir data/360_v2/garden \
+        --result_dir results/garden
     ```
 
     """
 
-    # Preset config factories we can choose between.
-    configs = {
-        "default": lambda: Config(),
-        "mcmc": lambda: Config(
-            strategy_type="mcmc",
-            init_opa=0.5,
-            init_scale=0.1,
-            opacity_reg=0.01,
-            scale_reg=0.01,
-            refine_stop_iter=25_000,
-        ),
-        "improved": lambda: Config(
-            strategy_type="improved",
-            absgrad=True,
-            refine_scale2d_stop_iter=4000,
-            refine_stop_iter=20_000,
-            budget=2_000_000,
-        ),
-    }
-
-    # Allow the first positional argument to pick a preset while still exposing the
-    # full dataclass-based help/flags for all remaining arguments.
-    cli_args = sys.argv[1:]
-    preset = "default"
-    if cli_args and not cli_args[0].startswith("-") and cli_args[0] in configs:
-        preset = cli_args[0]
-        cli_args = cli_args[1:]
-
-    default_cfg = configs[preset]()
-    cfg = tyro.cli(
-        Config,
-        args=cli_args,
-        default=default_cfg,
-    )
+    cfg = tyro.cli(Config)
     cfg.rebuild_strategy()
     cfg.adjust_steps(cfg.steps_scaler)
 
