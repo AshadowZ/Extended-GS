@@ -11,7 +11,7 @@ This script:
 2. Runs the HLOC SfM pipeline using the copied images.
 
 Example:
-    python run_hloc_sfm.py \                                           
+    python run_hloc_sfm.py \
         --input_image_dir /media/joker/HV/3DGS/flyroom/input \
         --camera_model PINHOLE \
         --matching_method sequential \

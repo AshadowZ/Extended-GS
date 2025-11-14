@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -80,7 +81,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [30_000])
     # Whether to save ply file (storage size can be large)
@@ -112,9 +113,36 @@ class Config:
     # Far plane clipping distance
     far_plane: float = 1e10
 
-    # Strategy for GS densification
+    # Densification strategy selection (default / mcmc / improved)
+    strategy_type: Literal["default", "mcmc", "improved"] = "default"
+    # Verbosity for densification logs
+    strategy_verbose: bool = True
+    # Densification hyper-parameters (see notes below; shared unless marked otherwise)
+    prune_opa: float = 0.05
+    grow_grad2d: float = 0.0002
+    prune_scale3d: float = 0.05
+    prune_scale2d: float = 0.15
+    refine_scale2d_stop_iter: int = 4000
+    refine_start_iter: int = 500
+    refine_stop_iter: int = 20000
+    reset_every: int = 3000
+    refine_every: int = 100
+    absgrad: bool = True
+    # DefaultStrategy-only hyper-parameters
+    grow_scale3d: float = 0.01
+    grow_scale2d: float = 0.05
+    pause_refine_after_reset: int = 0
+    revised_opacity: bool = False
+    # ImprovedStrategy-only hyper-parameter
+    budget: int = 2_000_000
+    # MCMCStrategy-only hyper-parameters
+    mcmc_cap_max: int = 1_000_000
+    mcmc_noise_lr: float = 5e5
+    mcmc_min_opacity: float = 0.005
+
+    # Strategy instance (constructed from the type/params above)
     strategy: Union[DefaultStrategy, MCMCStrategy, ImprovedStrategy] = field(
-        default_factory=DefaultStrategy
+        init=False, repr=False
     )
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
@@ -162,19 +190,19 @@ class Config:
 
     ### depth and normal regularization
     """Specifies applying depth regularization once every N iterations"""
-    depth_reg_every_n: int = 6
+    depth_reg_every_n: int = 4
     """If not None, the code will look for a folder named 'depth_dir_name' at the same level as
     the 'images' directory, load the dense depth maps from it, and use their depth values 
     for regularization.
     """
-    depth_dir_name: Optional[str] = "pi3_depth"  # "pi3_depth"
+    depth_dir_name: Optional[str] = "moge_depth"  # "pi3_depth"
     """Weight of the depth loss"""
     depth_loss_weight: float = 0.3
     """Starting iteration for depth regularization"""
     depth_loss_activation_step: int = 1000
 
     """Specifies applying normal regularization once every N iterations"""
-    normal_reg_every_n: int = 12
+    normal_reg_every_n: int = 8
     """If not None, the code will look for a folder named 'normal_dir_name' at the same level as
     the 'images' directory, load the dense normal maps from it, and use their normal values 
     for regularization.
@@ -229,6 +257,9 @@ class Config:
     with_ut: bool = False
     with_eval3d: bool = False
 
+    def __post_init__(self):
+        self.rebuild_strategy()
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -253,6 +284,53 @@ class Config:
             strategy.refine_every = int(strategy.refine_every * factor)
         else:
             assert_never(strategy)
+
+    def rebuild_strategy(self):
+        if self.strategy_type == "default":
+            self.strategy = DefaultStrategy(
+                prune_opa=self.prune_opa,
+                grow_grad2d=self.grow_grad2d,
+                grow_scale3d=self.grow_scale3d,
+                grow_scale2d=self.grow_scale2d,
+                prune_scale3d=self.prune_scale3d,
+                prune_scale2d=self.prune_scale2d,
+                refine_scale2d_stop_iter=self.refine_scale2d_stop_iter,
+                refine_start_iter=self.refine_start_iter,
+                refine_stop_iter=self.refine_stop_iter,
+                reset_every=self.reset_every,
+                refine_every=self.refine_every,
+                pause_refine_after_reset=self.pause_refine_after_reset,
+                absgrad=self.absgrad,
+                revised_opacity=self.revised_opacity,
+                verbose=self.strategy_verbose,
+            )
+        elif self.strategy_type == "mcmc":
+            self.strategy = MCMCStrategy(
+                cap_max=self.mcmc_cap_max,
+                noise_lr=self.mcmc_noise_lr,
+                refine_start_iter=self.refine_start_iter,
+                refine_stop_iter=self.refine_stop_iter,
+                refine_every=self.refine_every,
+                min_opacity=self.mcmc_min_opacity,
+                verbose=self.strategy_verbose,
+            )
+        elif self.strategy_type == "improved":
+            self.strategy = ImprovedStrategy(
+                prune_opa=self.prune_opa,
+                grow_grad2d=self.grow_grad2d,
+                prune_scale3d=self.prune_scale3d,
+                prune_scale2d=self.prune_scale2d,
+                refine_scale2d_stop_iter=self.refine_scale2d_stop_iter,
+                refine_start_iter=self.refine_start_iter,
+                refine_stop_iter=self.refine_stop_iter,
+                reset_every=self.reset_every,
+                refine_every=self.refine_every,
+                absgrad=self.absgrad,
+                verbose=self.strategy_verbose,
+                budget=self.budget,
+            )
+        else:
+            assert_never(self.strategy_type)
 
 
 def create_splats_with_optimizers(
@@ -673,6 +751,35 @@ class Runner:
             image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
 
+            # Optional priors
+            depth_prior = None
+            raw_depth_prior = data.get("depth_prior")
+            if (
+                raw_depth_prior is not None
+                and isinstance(raw_depth_prior, torch.Tensor)
+                and raw_depth_prior.numel() > 0
+            ):
+                depth_prior = raw_depth_prior.to(device)
+                if depth_prior.dim() == 3:
+                    depth_prior = depth_prior.unsqueeze(0)
+
+            normal_prior = None
+            normal_prior_mask = None
+            raw_normal_prior = data.get("normal_prior")
+            if (
+                raw_normal_prior is not None
+                and isinstance(raw_normal_prior, torch.Tensor)
+                and raw_normal_prior.numel() > 0
+            ):
+                normal_prior = raw_normal_prior.to(device)
+                if normal_prior.dim() == 3:
+                    normal_prior = normal_prior.unsqueeze(0)
+                ones_like = torch.ones_like(normal_prior)
+                is_invalid = torch.isclose(normal_prior, ones_like).all(
+                    dim=-1, keepdim=True
+                )
+                normal_prior_mask = (~is_invalid).float()
+
             height, width = pixels.shape[1:3]
 
             if cfg.pose_noise:
@@ -685,14 +792,15 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # Determine required render mode based on active regularizations
-            need_depth = (
-                cfg.depth_dir_name is not None
+            need_depth_prior = (
+                depth_prior is not None
                 and cfg.depth_loss_weight > 0.0
                 and step >= cfg.depth_loss_activation_step
                 and step % cfg.depth_reg_every_n == 0
             )
-            need_normal = (
-                cfg.normal_dir_name is not None
+            need_normal_prior = (
+                normal_prior is not None
+                and step % cfg.normal_reg_every_n == 0
                 and (
                     (
                         cfg.surf_normal_loss_weight > 0
@@ -703,13 +811,22 @@ class Runner:
                         and step >= cfg.render_normal_loss_activation_step
                     )
                 )
+            )
+            need_consistency_normal = (
+                cfg.consistency_normal_loss_weight > 0.0
+                and step >= cfg.consistency_normal_loss_activation_step
                 and step % cfg.normal_reg_every_n == 0
             )
 
+            need_depth_for_render = (
+                need_depth_prior or need_normal_prior or need_consistency_normal
+            )
+            need_normals_for_render = need_normal_prior or need_consistency_normal
+
             # Select render mode
-            if need_normal:
+            if need_normals_for_render:
                 render_mode = "RGB+ED+N"
-            elif need_depth:
+            elif need_depth_for_render:
                 render_mode = "RGB+ED"
             else:
                 render_mode = "RGB"
@@ -781,24 +898,45 @@ class Runner:
                 loss += tvloss
 
             # depth loss
-            if need_depth:
-                depths_prior = data["depth_prior"].to(device)  # [B,H,W,1]
-                depth_loss = self.compute_depth_loss(depths, depths_prior)
+            if need_depth_prior:
+                depth_loss = self.compute_depth_loss(depths, depth_prior)
                 loss += cfg.depth_loss_weight * depth_loss
 
+            consistency_norm_loss = None
+            surf_normal_loss = None
+            render_normal_loss = None
+
+            surf_normals_from_depth = None
+            if (need_consistency_normal or need_normal_prior) and depths is not None:
+                surf_normals_from_depth = get_implied_normal_from_depth(depths, Ks)
+
+            # consistency normal loss
+            if (
+                need_consistency_normal
+                and surf_normals_from_depth is not None
+                and render_normals is not None
+            ):
+                mask_consistency = torch.ones_like(alphas)
+                consistency_norm_loss = self.compute_normal_loss(
+                    F.normalize(render_normals, dim=-1),
+                    surf_normals_from_depth,
+                    mask_consistency,
+                )
+                loss += cfg.consistency_normal_loss_weight * consistency_norm_loss
+
             # normal loss
-            if need_normal:
-                normals_prior = data["normal_prior"].to(device)  # [B,H,W,3]
+            if need_normal_prior and surf_normals_from_depth is not None:
                 mask = torch.ones_like(depths).float()  # [B,H,W,1]
+                if normal_prior_mask is not None:
+                    mask = mask * normal_prior_mask
 
                 # Surface normal loss (from depth)
                 if (
                     cfg.surf_normal_loss_weight > 0
                     and step >= cfg.surf_normal_loss_activation_step
                 ):
-                    surf_normals = get_implied_normal_from_depth(depths, Ks)
                     surf_normal_loss = self.compute_normal_loss(
-                        surf_normals, normals_prior, mask
+                        surf_normals_from_depth, normal_prior, mask
                     )
                     loss += cfg.surf_normal_loss_weight * surf_normal_loss
 
@@ -806,9 +944,10 @@ class Runner:
                 if (
                     cfg.render_normal_loss_weight > 0
                     and step >= cfg.render_normal_loss_activation_step
+                    and render_normals is not None
                 ):
                     render_normal_loss = self.compute_normal_loss(
-                        render_normals, normals_prior, mask
+                        render_normals, normal_prior, mask
                     )
                     loss += cfg.render_normal_loss_weight * render_normal_loss
 
@@ -850,6 +989,30 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.use_bilateral_grid:
                     self.writer.add_scalar("train/tvloss", tvloss.item(), step)
+                if need_depth_prior:
+                    self.writer.add_scalar("train/depthloss", depth_loss.item(), step)
+                if (
+                    need_normal_prior
+                    and cfg.surf_normal_loss_weight > 0
+                    and surf_normal_loss is not None
+                ):
+                    self.writer.add_scalar(
+                        "train/surf_normalloss", surf_normal_loss.item(), step
+                    )
+                if (
+                    need_normal_prior
+                    and cfg.render_normal_loss_weight > 0
+                    and render_normal_loss is not None
+                ):
+                    self.writer.add_scalar(
+                        "train/render_normalloss", render_normal_loss.item(), step
+                    )
+                if need_consistency_normal and consistency_norm_loss is not None:
+                    self.writer.add_scalar(
+                        "train/consistency_normalloss",
+                        consistency_norm_loss.item(),
+                        step,
+                    )
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -1481,54 +1644,55 @@ if __name__ == "__main__":
     Usage:
 
     ```bash
-    # Single GPU training
-    CUDA_VISIBLE_DEVICES=9 python -m examples.simple_trainer default
+    # Single GPU training using the default preset + default densification.
+    CUDA_VISIBLE_DEVICES=9 python -m examples.extended_trainer
 
-    # Distributed training on 4 GPUs: Effectively 4x batch size so run 4x less steps.
-    CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py default --steps_scaler 0.25
+    # Explicitly pick a preset and override the densification strategy from the CLI.
+    CUDA_VISIBLE_DEVICES=0 python -m examples.extended_trainer \
+        mcmc --steps_scaler 0.5 --strategy_type improved
+
+    # Distributed training on 4 GPUs: effectively 4× batch size so run 4× fewer steps.
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python -m examples.extended_trainer \
+        improved --steps_scaler 0.25 --strategy_type improved
+    ```
 
     """
 
-    # Config objects we can choose between.
-    # Each is a tuple of (CLI description, config object).
+    # Preset config factories we can choose between.
     configs = {
-        "default": (
-            "Gaussian splatting training using densification heuristics from the original paper.",
-            Config(
-                strategy=DefaultStrategy(verbose=True),
-            ),
+        "default": lambda: Config(),
+        "mcmc": lambda: Config(
+            strategy_type="mcmc",
+            init_opa=0.5,
+            init_scale=0.1,
+            opacity_reg=0.01,
+            scale_reg=0.01,
+            refine_stop_iter=25_000,
         ),
-        "mcmc": (
-            "Gaussian splatting training using densification from the paper '3D Gaussian Splatting as Markov Chain Monte Carlo'.",
-            Config(
-                init_opa=0.5,
-                init_scale=0.1,
-                opacity_reg=0.01,
-                scale_reg=0.01,
-                strategy=MCMCStrategy(verbose=True),
-            ),
-        ),
-        "improved": (
-            "Gaussian splatting training using improved strategy with budget-based importance sampling.",
-            Config(
-                strategy=ImprovedStrategy(
-                    prune_opa=0.005,
-                    grow_grad2d=0.0002,
-                    prune_scale3d=0.1,
-                    prune_scale2d=0.15,
-                    refine_scale2d_stop_iter=4000,
-                    refine_start_iter=500,
-                    refine_stop_iter=20000,
-                    reset_every=3000,
-                    refine_every=100,
-                    absgrad=True,
-                    verbose=True,
-                    budget=3000000,
-                ),
-            ),
+        "improved": lambda: Config(
+            strategy_type="improved",
+            absgrad=True,
+            refine_scale2d_stop_iter=4000,
+            refine_stop_iter=20_000,
+            budget=2_000_000,
         ),
     }
-    cfg = tyro.extras.overridable_config_cli(configs)
+
+    # Allow the first positional argument to pick a preset while still exposing the
+    # full dataclass-based help/flags for all remaining arguments.
+    cli_args = sys.argv[1:]
+    preset = "default"
+    if cli_args and not cli_args[0].startswith("-") and cli_args[0] in configs:
+        preset = cli_args[0]
+        cli_args = cli_args[1:]
+
+    default_cfg = configs[preset]()
+    cfg = tyro.cli(
+        Config,
+        args=cli_args,
+        default=default_cfg,
+    )
+    cfg.rebuild_strategy()
     cfg.adjust_steps(cfg.steps_scaler)
 
     # Import BilateralGrid and related functions based on configuration
