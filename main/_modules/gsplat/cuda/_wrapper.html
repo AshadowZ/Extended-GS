@@ -403,7 +403,7 @@
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3, 3]</span>
     <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Transforms Gaussians from world to camera coordinate system.</span>
 
 <span class="sd">    Args:</span>
@@ -880,7 +880,7 @@
     <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., tile_height, tile_width]</span>
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels.</span>
 
 <span class="sd">    Args:</span>
@@ -903,6 +903,7 @@
 
 <span class="sd">        - **Rendered colors**. [..., image_height, image_width, channels]</span>
 <span class="sd">        - **Rendered alphas**. [..., image_height, image_width, 1]</span>
+<span class="sd">        - **Rendered median depth**. [..., image_height, image_width, 1]</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
@@ -983,7 +984,7 @@
         <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
     <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
 
-    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_RasterizeToPixels</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_median</span> <span class="o">=</span> <span class="n">_RasterizeToPixels</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">conics</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1000,7 +1001,7 @@
 
     <span class="k">if</span> <span class="n">padded_channels</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">render_colors</span> <span class="o">=</span> <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="n">padded_channels</span><span class="p">]</span>
-    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span></div>
+    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_median</span></div>
 
 
 
@@ -1604,7 +1605,13 @@
         <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
         <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+        <span class="p">(</span>
+            <span class="n">render_colors</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">render_median</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
             <span class="s2">&quot;rasterize_to_pixels_3dgs_fwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
@@ -1631,6 +1638,7 @@
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">render_alphas</span><span class="p">,</span>
             <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
@@ -1639,13 +1647,14 @@
 
         <span class="c1"># double to float</span>
         <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">render_alphas</span><span class="o">.</span><span class="n">float</span><span class="p">()</span>
-        <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
+        <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_median</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., H, W, 3]</span>
         <span class="n">v_render_alphas</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., H, W, 1]</span>
+        <span class="n">v_render_median</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., H, W, 1]</span>
     <span class="p">):</span>
         <span class="p">(</span>
             <span class="n">means2d</span><span class="p">,</span>
@@ -1658,6 +1667,7 @@
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">render_alphas</span><span class="p">,</span>
             <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
         <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
@@ -1684,8 +1694,10 @@
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">render_alphas</span><span class="p">,</span>
             <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">median_ids</span><span class="p">,</span>
             <span class="n">v_render_colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_render_alphas</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">v_render_median</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">absgrad</span><span class="p">,</span>
         <span class="p">)</span>
 

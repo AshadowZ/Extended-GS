@@ -520,7 +520,8 @@ X depends on the <cite>render_mode</cite> and input <cite>colors</cite>. If <cit
 X is D; if <cite>render_mode</cite> is “D” or “ED”, X is 1; if <cite>render_mode</cite> is “RGB+D” or
 “RGB+ED”, X is D+1; if <cite>render_mode</cite> is “RGB+ED+N”, X is D+4.</p>
 <p><strong>render_alphas</strong>: The rendered alphas. […, C, height, width, 1].</p>
-<p><strong>meta</strong>: A dictionary of intermediate results of the rasterization.</p>
+<p><strong>meta</strong>: A dictionary of intermediate results of the rasterization. When using the 3DGS
+backend, this now includes a <cite>render_median</cite> entry storing the median depth map.</p>
 </p>
 </dd>
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
