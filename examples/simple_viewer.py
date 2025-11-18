@@ -139,8 +139,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
 
         RENDER_MODE_MAP = {
             "rgb": "RGB",
-            "depth(accumulated)": "D",
-            "depth(expected)": "ED",
+            "expected_depth": "ED",
+            "median_depth": "ED",
             "alpha": "RGB",
             "render_normal": "RGB+ED+N",
             "surf_normal": "ED",
@@ -177,13 +177,17 @@ def main(local_rank: int, world_rank, world_size: int, args):
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
 
+        render_median = info.get("render_median")
         if render_tab_state.render_mode == "rgb":
             # colors represented with sh are not guranteed to be in [0, 1]
             render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
             renders = render_colors.cpu().numpy()
-        elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
-            # normalize depth to [0, 1]
-            depth = render_colors[0, ..., 0:1]
+        elif render_tab_state.render_mode in ["expected_depth", "median_depth"]:
+            depth = (
+                render_colors[0, ..., 0:1]
+                if render_tab_state.render_mode == "expected_depth"
+                else render_median[0]
+            )
             if render_tab_state.normalize_nearfar:
                 near_plane = render_tab_state.near_plane
                 far_plane = render_tab_state.far_plane

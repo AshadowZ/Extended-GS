@@ -237,7 +237,8 @@ def rasterization(
 
         **render_alphas**: The rendered alphas. [..., C, height, width, 1].
 
-        **meta**: A dictionary of intermediate results of the rasterization.
+        **meta**: A dictionary of intermediate results of the rasterization. When using the 3DGS
+        backend, this now includes a `render_median` entry storing the median depth map.
 
     Examples:
 
@@ -711,10 +712,11 @@ def rasterization(
     )
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
+    render_median = None
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-        render_colors, render_alphas = [], []
+        render_colors, render_alphas, render_medians = [], [], []
         for i in range(n_chunks):
             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
             backgrounds_chunk = (
@@ -722,6 +724,7 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
+            render_median_ = None
             if with_eval3d:
                 render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
                     means,
@@ -746,7 +749,7 @@ def rasterization(
                     viewmats_rs=viewmats_rs,
                 )
             else:
-                render_colors_, render_alphas_ = rasterize_to_pixels(
+                render_colors_, render_alphas_, render_median_ = rasterize_to_pixels(
                     means2d,
                     conics,
                     colors_chunk,
@@ -762,8 +765,10 @@ def rasterization(
                 )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
+            render_medians.append(render_median_)
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
+        render_median = render_medians[0]
     else:
         if with_eval3d:
             render_colors, render_alphas = rasterize_to_pixels_eval3d(
@@ -789,7 +794,7 @@ def rasterization(
                 viewmats_rs=viewmats_rs,
             )
         else:
-            render_colors, render_alphas = rasterize_to_pixels(
+            render_colors, render_alphas, render_median = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors,
@@ -817,6 +822,7 @@ def rasterization(
                 dim=-1,
             )
 
+    meta["render_median"] = render_median
     return render_colors, render_alphas, meta
 
 

@@ -492,7 +492,7 @@ def main():
 
             # Render RGB + Expected Depth (ED)
             if args.gs_type == "3dgs":
-                renders, _, _ = rasterization(
+                renders, _, meta = rasterization(
                     means=means,
                     quats=quats,
                     scales=scales,
@@ -508,9 +508,8 @@ def main():
                 )
 
                 # Separate color and depth
-                # renders shape is [1, H, W, 4] (RGB+D)
                 color = renders[..., 0:3].clamp(0.0, 1.0)  # [1, H, W, 3]
-                depth = renders[..., 3:4]  # [1, H, W, 1]
+                depth = meta["render_median"]  # [1, H, W, 1]
             else:
                 (render_colors, _, _, _, render_median, _,) = rasterization_2dgs(
                     means=means,

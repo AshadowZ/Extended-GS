@@ -548,7 +548,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     backgrounds.requires_grad = True
 
     # forward
-    render_colors, render_alphas = rasterize_to_pixels(
+    render_colors, render_alphas, render_median = rasterize_to_pixels(
         means2d,
         conics,
         colors,

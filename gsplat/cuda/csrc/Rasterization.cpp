@@ -17,7 +17,13 @@ namespace gsplat {
 // 3DGS
 ////////////////////////////////////////////////////
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor means2d,   // [..., N, 2] or [nnz, 2]
     const at::Tensor conics,    // [..., N, 3] or [nnz, 3]
@@ -63,6 +69,14 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     last_ids_dims.append({image_height, image_width});
     at::Tensor last_ids = at::empty(last_ids_dims, opt.dtype(at::kInt));
 
+    at::DimVector median_ids_dims(image_dims);
+    median_ids_dims.append({image_height, image_width});
+    at::Tensor median_ids = at::empty(median_ids_dims, opt.dtype(at::kInt));
+
+    at::DimVector render_median_dims(image_dims);
+    render_median_dims.append({image_height, image_width, 1});
+    at::Tensor render_median = at::empty(render_median_dims, opt);
+
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
         launch_rasterize_to_pixels_3dgs_fwd_kernel<N>(                         \
@@ -79,7 +93,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
             flatten_ids,                                                       \
             renders,                                                           \
             alphas,                                                            \
-            last_ids                                                           \
+            render_median,                                                     \
+            last_ids,                                                          \
+            median_ids                                                         \
         );                                                                     \
         break;
 
@@ -111,10 +127,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     }
 #undef __LAUNCH_KERNEL__
 
-    return std::make_tuple(renders, alphas, last_ids);
+    return std::make_tuple(renders, alphas, last_ids, render_median, median_ids);
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
 rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
@@ -133,9 +154,11 @@ rasterize_to_pixels_3dgs_bwd(
     // forward outputs
     const at::Tensor render_alphas, // [..., image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., image_height, image_width]
+    const at::Tensor median_ids,    // [..., image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., image_height, image_width, channels]
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_median, // [..., image_height, image_width, 1]
     // options
     bool absgrad
 ) {
@@ -148,8 +171,10 @@ rasterize_to_pixels_3dgs_bwd(
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
+    CHECK_INPUT(median_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(v_render_median);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
     }
@@ -184,8 +209,10 @@ rasterize_to_pixels_3dgs_bwd(
             flatten_ids,                                                       \
             render_alphas,                                                     \
             last_ids,                                                          \
+            median_ids,                                                        \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
+            v_render_median,                                                   \
             absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
             v_means2d,                                                         \
             v_conics,                                                          \

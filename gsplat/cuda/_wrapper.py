@@ -98,7 +98,7 @@ def world_to_cam(
     means: Tensor,  # [..., N, 3]
     covars: Tensor,  # [..., N, 3, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Transforms Gaussians from world to camera coordinate system.
 
     Args:
@@ -554,7 +554,7 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
     Args:
@@ -577,6 +577,7 @@ def rasterize_to_pixels(
 
         - **Rendered colors**. [..., image_height, image_width, channels]
         - **Rendered alphas**. [..., image_height, image_width, 1]
+        - **Rendered median depth**. [..., image_height, image_width, 1]
     """
 
     image_dims = means2d.shape[:-2]
@@ -657,7 +658,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    render_colors, render_alphas, render_median = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -674,7 +675,7 @@ def rasterize_to_pixels(
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_median
 
 
 def rasterize_to_pixels_eval3d(
@@ -1274,7 +1275,13 @@ class _RasterizeToPixels(torch.autograd.Function):
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+        (
+            render_colors,
+            render_alphas,
+            last_ids,
+            render_median,
+            median_ids,
+        ) = _make_lazy_cuda_func(
             "rasterize_to_pixels_3dgs_fwd"
         )(
             means2d,
@@ -1301,6 +1308,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             flatten_ids,
             render_alphas,
             last_ids,
+            median_ids,
         )
         ctx.width = width
         ctx.height = height
@@ -1309,13 +1317,14 @@ class _RasterizeToPixels(torch.autograd.Function):
 
         # double to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas
+        return render_colors, render_alphas, render_median
 
     @staticmethod
     def backward(
         ctx,
         v_render_colors: Tensor,  # [..., H, W, 3]
         v_render_alphas: Tensor,  # [..., H, W, 1]
+        v_render_median: Tensor,  # [..., H, W, 1]
     ):
         (
             means2d,
@@ -1328,6 +1337,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             flatten_ids,
             render_alphas,
             last_ids,
+            median_ids,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
@@ -1354,8 +1364,10 @@ class _RasterizeToPixels(torch.autograd.Function):
             flatten_ids,
             render_alphas,
             last_ids,
+            median_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
+            v_render_median.contiguous(),
             absgrad,
         )
 

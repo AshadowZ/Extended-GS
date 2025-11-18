@@ -32,9 +32,11 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    at::Tensor renders, // [..., image_height, image_width, channels]
-    at::Tensor alphas,  // [..., image_height, image_width]
-    at::Tensor last_ids // [..., image_height, image_width]
+    at::Tensor renders,       // [..., image_height, image_width, channels]
+    at::Tensor alphas,        // [..., image_height, image_width]
+    at::Tensor render_median, // [..., image_height, image_width, 1]
+    at::Tensor last_ids,      // [..., image_height, image_width]
+    at::Tensor median_ids     // [..., image_height, image_width]
 );
 
 template <uint32_t CDIM>
@@ -56,9 +58,11 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // forward outputs
     const at::Tensor render_alphas,   // [..., image_height, image_width, 1]
     const at::Tensor last_ids,        // [..., image_height, image_width]
+    const at::Tensor median_ids,      // [..., image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_median, // [..., image_height, image_width, 1]
     // outputs
     at::optional<at::Tensor> v_means2d_abs, // [..., N, 2] or [nnz, 2]
     at::Tensor v_means2d,                   // [..., N, 2] or [nnz, 2]

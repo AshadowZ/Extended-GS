@@ -19,8 +19,8 @@ class GsplatRenderTabState(RenderTabState):
     backgrounds: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     render_mode: Literal[
         "rgb",
-        "depth(accumulated)",
-        "depth(expected)",
+        "expected_depth",
+        "median_depth",
         "alpha",
         "render_normal",
         "surf_normal",
@@ -148,8 +148,8 @@ class GsplatViewer(Viewer):
                     "Render Mode",
                     (
                         "rgb",
-                        "depth(accumulated)",
-                        "depth(expected)",
+                        "expected_depth",
+                        "median_depth",
                         "alpha",
                         "render_normal",
                         "surf_normal",
@@ -160,7 +160,7 @@ class GsplatViewer(Viewer):
 
                 @render_mode_dropdown.on_update
                 def _(_) -> None:
-                    if "depth" in render_mode_dropdown.value:
+                    if render_mode_dropdown.value in ("expected_depth", "median_depth"):
                         normalize_nearfar_checkbox.disabled = False
                         inverse_checkbox.disabled = False
                     else:
