@@ -2,7 +2,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, Union
 
 import torch
 from torch import Tensor
@@ -98,7 +98,10 @@ def world_to_cam(
     means: Tensor,  # [..., N, 3]
     covars: Tensor,  # [..., N, 3, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
-) -> Tuple[Tensor, Tensor, Tensor]:
+) -> Union[
+    Tuple[Tensor, Tensor, Tensor],
+    Tuple[Tensor, Tensor, Tensor, Tensor],
+]:
     """Transforms Gaussians from world to camera coordinate system.
 
     Args:
@@ -554,7 +557,10 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [..., tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
-) -> Tuple[Tensor, Tensor, Tensor]:
+    track_pixel_gaussians: bool = False,
+    max_gaussians_per_pixel: int = 100,
+    pixel_gaussian_threshold: float = 0.1,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
     Args:
@@ -571,6 +577,10 @@ def rasterize_to_pixels(
         masks: Optional tile mask to skip rendering GS to masked tiles. [..., tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        track_pixel_gaussians: If True, record (gaussian_id, pixel_id) pairs whose contributions exceed
+            `pixel_gaussian_threshold`. Default: False.
+        max_gaussians_per_pixel: Maximum number of recorded Gaussians per pixel. Default: 100.
+        pixel_gaussian_threshold: Contribution threshold `w = alpha * T` to record a Gaussian. Default: 0.1.
 
     Returns:
         A tuple:
@@ -578,6 +588,7 @@ def rasterize_to_pixels(
         - **Rendered colors**. [..., image_height, image_width, channels]
         - **Rendered alphas**. [..., image_height, image_width, 1]
         - **Rendered median depth**. [..., image_height, image_width, 1]
+        - **Pixel-to-Gaussian pairs**. [K, 2] with `(gaussian_id, pixel_id)`；若 `track_pixel_gaussians=False` 则返回空 tensor。
     """
 
     image_dims = means2d.shape[:-2]
@@ -658,7 +669,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas, render_median = _RasterizeToPixels.apply(
+    render_colors, render_alphas, render_median, pixel_gaussians = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -671,11 +682,16 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        track_pixel_gaussians,
+        max_gaussians_per_pixel,
+        pixel_gaussian_threshold,
     )
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas, render_median
+    if track_pixel_gaussians:
+        return render_colors, render_alphas, render_median, pixel_gaussians
+    return render_colors, render_alphas, render_median, pixel_gaussians
 
 
 def rasterize_to_pixels_eval3d(
@@ -946,7 +962,7 @@ class _QuatScaleToCovarPreci(torch.autograd.Function):
         compute_covar: bool = True,
         compute_preci: bool = True,
         triu: bool = False,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         covars, precis = _make_lazy_cuda_func("quat_scale_to_covar_preci_fwd")(
             quats, scales, compute_covar, compute_preci, triu
         )
@@ -1274,13 +1290,17 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [..., tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
+        track_pixel_gaussians: bool,
+        max_gaussians_per_pixel: int,
+        pixel_gaussian_threshold: float,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         (
             render_colors,
             render_alphas,
             last_ids,
             render_median,
             median_ids,
+            pixel_gaussians,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_3dgs_fwd")(
             means2d,
             conics,
@@ -1293,6 +1313,9 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            track_pixel_gaussians,
+            max_gaussians_per_pixel,
+            pixel_gaussian_threshold,
         )
 
         ctx.save_for_backward(
@@ -1315,7 +1338,7 @@ class _RasterizeToPixels(torch.autograd.Function):
 
         # double to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas, render_median
+        return render_colors, render_alphas, render_median, pixel_gaussians
 
     @staticmethod
     def backward(
@@ -1323,6 +1346,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         v_render_colors: Tensor,  # [..., H, W, 3]
         v_render_alphas: Tensor,  # [..., H, W, 1]
         v_render_median: Tensor,  # [..., H, W, 1]
+        _: Optional[Tensor] = None,
     ):
         (
             means2d,
@@ -1385,6 +1409,9 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
+            None,
+            None,
             None,
             None,
             None,
