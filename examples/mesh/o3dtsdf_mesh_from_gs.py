@@ -509,7 +509,9 @@ def main():
 
                 # Separate color and depth
                 color = renders[..., 0:3].clamp(0.0, 1.0)  # [1, H, W, 3]
-                depth = meta["render_median"]  # [1, H, W, 1]
+                median_depth = meta["render_median"]  # [1, H, W, 1] median depth
+                expected_depth = renders[..., 3:4] # [1, H, W, 1] expected depth
+                depth = 1.0 * median_depth + 0.0 * expected_depth
             else:
                 (render_colors, _, _, _, render_median, _,) = rasterization_2dgs(
                     means=means,

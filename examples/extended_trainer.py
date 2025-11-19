@@ -899,7 +899,10 @@ class Runner:
 
             # depth loss
             if need_depth_prior:
-                depth_loss = self.compute_depth_loss(depths, depth_prior)
+                median_depths = info.get("render_median")
+                depth_loss = self.compute_depth_loss(
+                    depths, median_depths, depth_prior
+                )
                 loss += cfg.depth_loss_weight * depth_loss
 
             consistency_norm_loss = None
@@ -1480,36 +1483,42 @@ class Runner:
         return renders
 
     def compute_depth_loss(
-        self, pred_depth: torch.Tensor, gt_depth: torch.Tensor
+        self,
+        expected_depth: Optional[torch.Tensor],
+        median_depth: Optional[torch.Tensor],
+        gt_depth: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Computes the mean absolute depth loss between predicted and ground-truth depth maps,
-        supporting batched input.
-
-        Args:
-            pred_depth (torch.Tensor): Predicted depth maps of shape [B, H, W, 1] or [H, W, 1].
-            gt_depth (torch.Tensor): Ground-truth depth maps of shape [B, H, W, 1] or [H, W, 1].
-
-        Returns:
-            torch.Tensor: A scalar tensor representing the averaged absolute depth loss across the batch.
+        Computes a weighted L1 loss between predicted depths and the ground-truth depth map.
+        By default we prefer the more robust median depth (weight 0.6) and blend in the
+        expected depth (weight 0.4). If either is missing, the other depth will be used alone.
         """
+        device = gt_depth.device
+        w_median = 0.6 if median_depth is not None else 0.0
+        w_expected = 0.4 if expected_depth is not None else 0.0
+        total_weight = w_median + w_expected
+        if total_weight == 0.0:
+            return torch.tensor(0.0, device=device)
+
         valid_pix = gt_depth > 0.0
         if not valid_pix.any():
-            return torch.tensor(0.0, device=pred_depth.device)
+            return torch.tensor(0.0, device=device)
 
-        diff = torch.where(valid_pix, pred_depth - gt_depth, 0)
-        abs_diff = torch.abs(diff)
+        blended_error = 0.0
+        if median_depth is not None:
+            diff = torch.where(valid_pix, median_depth - gt_depth, 0.0)
+            blended_error = blended_error + w_median * diff.abs()
+        if expected_depth is not None:
+            diff = torch.where(valid_pix, expected_depth - gt_depth, 0.0)
+            blended_error = blended_error + w_expected * diff.abs()
 
-        # Automatically infer batch dimension
-        if pred_depth.ndim == 4:  # [B,H,W,1]
-            per_image_loss = abs_diff.sum(dim=(1, 2, 3)) / valid_pix.sum(
+        if blended_error.ndim == 4:
+            per_image = blended_error.sum(dim=(1, 2, 3)) / valid_pix.sum(
                 dim=(1, 2, 3)
             ).clamp(min=1)
-            depth_loss = per_image_loss.mean()
-        else:  # Single image [H,W] or [H,W,1]
-            depth_loss = abs_diff.sum() / valid_pix.sum().clamp(min=1)
-
-        return depth_loss
+            return (per_image / total_weight).mean()
+        else:
+            return blended_error.sum() / (valid_pix.sum().clamp(min=1) * total_weight)
 
     def compute_normal_loss(
         self,
