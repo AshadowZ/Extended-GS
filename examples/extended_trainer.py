@@ -900,9 +900,7 @@ class Runner:
             # depth loss
             if need_depth_prior:
                 median_depths = info.get("render_median")
-                depth_loss = self.compute_depth_loss(
-                    depths, median_depths, depth_prior
-                )
+                depth_loss = self.compute_depth_loss(depths, median_depths, depth_prior)
                 loss += cfg.depth_loss_weight * depth_loss
 
             consistency_norm_loss = None

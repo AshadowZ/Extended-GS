@@ -1281,9 +1281,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             last_ids,
             render_median,
             median_ids,
-        ) = _make_lazy_cuda_func(
-            "rasterize_to_pixels_3dgs_fwd"
-        )(
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_3dgs_fwd")(
             means2d,
             conics,
             colors,
