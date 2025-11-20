@@ -151,7 +151,7 @@ class Parser:
             raise ValueError("No images found in COLMAP.")
 
         # Check if any camera has distortion (non-PINHOLE models)
-        has_distortion = any(
+        has_distortion = any( # error
             camtype != "perspective" for camtype in camtype_dict.values()
         )
         if has_distortion:
