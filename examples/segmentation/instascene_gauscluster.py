@@ -12,6 +12,16 @@ import torch.nn.functional as F
 import networkx as nx
 from tqdm import tqdm
 
+try:
+    from cuml.cluster import DBSCAN as cuDBSCAN
+    import cupy as cp
+
+    HAS_CUML = True
+except ImportError:
+    cuDBSCAN = None
+    cp = None
+    HAS_CUML = False
+
 # -------------------------------------------------------------------------
 # Ensure the examples directory (parent of this file) is on sys.path so the
 # dataset utilities can be imported just like other example scripts do.
@@ -255,8 +265,32 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     return tracker
 
 
-def dbscan_process(pcld: o3d.geometry.PointCloud, point_ids: List[int], eps=0.1, min_points=4):
-    labels = np.array(pcld.cluster_dbscan(eps=eps, min_points=min_points)) + 1
+def _gpu_dbscan(points: np.ndarray, eps: float, min_points: int) -> np.ndarray:
+    points_cp = cp.asarray(points.astype(np.float32))
+    model = cuDBSCAN(eps=eps, min_samples=min_points)
+    labels = model.fit_predict(points_cp)
+    if hasattr(labels, "values"):
+        labels = labels.values
+    if hasattr(labels, "__cuda_array_interface__"):
+        labels = cp.asnumpy(labels)
+    labels = np.asarray(labels, dtype=np.int32)
+    return labels + 1  # shift noise (-1) to 0
+
+
+def dbscan_process(
+    pcld: o3d.geometry.PointCloud,
+    point_ids: List[int],
+    eps: float = 0.1,
+    min_points: int = 4,
+    use_gpu: bool = False,
+):
+    points_np = np.asarray(pcld.points)
+    if use_gpu and not HAS_CUML:
+        raise RuntimeError("cuML 未安装，无法使用 GPU DBSCAN。")
+    if use_gpu and points_np.shape[0] >= min_points and points_np.size > 0:
+        labels = _gpu_dbscan(points_np, eps, min_points)
+    else:
+        labels = np.array(pcld.cluster_dbscan(eps=eps, min_points=min_points)) + 1
     count = np.bincount(labels)
     pcld_list, point_ids_list = [], []
     pcld_ids_list = np.array(point_ids)
@@ -361,6 +395,7 @@ def post_process_clusters(
     dbscan_eps: float = 0.1,
     dbscan_min_points: int = 4,
     overlap_ratio: float = 0.8,
+    use_gpu_dbscan: bool = False,
 ) -> Dict:
     nodes = tracker["nodes"]
     mask_gaussian_pclds = tracker["mask_gaussian_pclds"]
@@ -375,7 +410,13 @@ def post_process_clusters(
             continue
         pcld = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(scene_points[list(node.point_ids)]))
         if True:
-            pcld_list, point_ids_list = dbscan_process(pcld, list(node.point_ids), eps=dbscan_eps, min_points=dbscan_min_points)
+            pcld_list, point_ids_list = dbscan_process(
+                pcld,
+                list(node.point_ids),
+                eps=dbscan_eps,
+                min_points=dbscan_min_points,
+                use_gpu=use_gpu_dbscan,
+            )
         else:
             pcld_list, point_ids_list = [pcld], [np.array(list(node.point_ids))]
         point_ids_list, bbox_list, mask_list = filter_point(
@@ -513,6 +554,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Where to save the prepared payload (.pt). Defaults to <data_dir>/gauscluster_input.pt",
+    )
+    parser.add_argument(
+        "--use_gpu_dbscan",
+        action="store_true",
+        help="Use cuML (GPU) DBSCAN for post-processing if available.",
     )
     return parser.parse_args()
 
@@ -811,6 +857,9 @@ def main():
 
     # 阶段三：DBSCAN + 点过滤
     print("\n开始后处理（阶段三：DBSCAN+点过滤）...")
+    if args.use_gpu_dbscan and not HAS_CUML:
+        raise RuntimeError("检测到 --use_gpu_dbscan 但未安装 cuML，请安装后重试或取消该选项。")
+
     clustering_result = post_process_clusters(
         clustering_result,
         point_positions=means,
@@ -818,6 +867,7 @@ def main():
         dbscan_eps=0.1,
         dbscan_min_points=4,
         overlap_ratio=0.8,
+        use_gpu_dbscan=args.use_gpu_dbscan,
     )
     print("后处理完成。")
     print(f"实例数（后处理）: {len(clustering_result['total_point_ids_list'])}")
