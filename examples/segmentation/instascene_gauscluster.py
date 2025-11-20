@@ -57,12 +57,22 @@ class Node:
         return Node(mask_list, visible_frame.float(), contained_mask.float(), point_ids, node_info, son_node_info)
 
 
-def compute_mask_visible_frame(global_gaussian_in_mask_matrix, gaussian_in_frame_matrix, threshold=0.0):
-    A = np.array(global_gaussian_in_mask_matrix, dtype=np.float32)
-    B = np.array(gaussian_in_frame_matrix, dtype=np.float32)
-    intersection_counts = A.T @ B  # [N_masks, N_frames]
-    mask_point_counts = A.sum(axis=0) + 1e-6
-    visible_mask = (intersection_counts / mask_point_counts[:, None]) > threshold
+def compute_mask_visible_frame(mask_gaussian_pclds, global_frame_mask_list, gaussian_in_frame_matrix, threshold=0.0):
+    """Estimate which frames each mask is visible in without materializing dense matrices."""
+    num_masks = len(global_frame_mask_list)
+    num_frames = gaussian_in_frame_matrix.shape[1]
+    visible_mask = np.zeros((num_masks, num_frames), dtype=bool)
+    iterator = tqdm(
+        enumerate(global_frame_mask_list),
+        total=num_masks,
+        desc="计算 mask 可见帧",
+    )
+    for mask_idx, (frame_id, mask_id) in iterator:
+        ids = mask_gaussian_pclds.get(f"{frame_id}_{mask_id}")
+        if ids is None or len(ids) == 0:
+            continue
+        frame_hits = gaussian_in_frame_matrix[np.asarray(ids, dtype=np.int64), :].sum(axis=0)
+        visible_mask[mask_idx] = (frame_hits / (len(ids) + 1e-6)) > threshold
     return visible_mask
 
 
@@ -71,39 +81,47 @@ def judge_single_mask(
     mask_gaussian_pclds,
     frame_mask_id,
     mask_visible_frame,
-    global_frame_mask_list,
+    frame_mask_to_index,
+    num_global_masks,
     mask_visible_threshold=0.7,
     contained_threshold=0.8,
     undersegment_filter_threshold=0.3,
 ):
     mask_gaussian_pcld = mask_gaussian_pclds[frame_mask_id]
     visible_frame = np.zeros(gaussian_in_mask_matrix.shape[1], dtype=bool)
-    contained_mask = np.zeros(len(global_frame_mask_list), dtype=bool)
+    contained_mask = np.zeros(num_global_masks, dtype=bool)
 
     mask_gaussians_info = gaussian_in_mask_matrix[list(mask_gaussian_pcld), :]
     split_num = 0
     visible_num = 0
 
     for frame_id in np.where(mask_visible_frame)[0]:
-        overlap_mask_ids, overlap_mask_cnts = np.unique(mask_gaussians_info[:, frame_id], return_counts=True)
-        sorted_idx = np.argsort(overlap_mask_cnts)[::-1]
-        overlap_mask_ids, overlap_mask_cnts = overlap_mask_ids[sorted_idx], overlap_mask_cnts[sorted_idx]
-
-        if 0 in overlap_mask_ids:
-            invalid_indice = np.where(overlap_mask_ids == 0)[0]
-            invalid_gaussian_cnts = overlap_mask_cnts[invalid_indice]
-            if invalid_gaussian_cnts / overlap_mask_cnts.sum() > mask_visible_threshold:
-                continue
-            overlap_mask_ids = np.delete(overlap_mask_ids, invalid_indice)
-            overlap_mask_cnts = np.delete(overlap_mask_cnts, invalid_indice)
-
-        if len(overlap_mask_ids) == 0:
+        frame_info = mask_gaussians_info[:, frame_id]
+        if frame_info.size == 0:
             continue
-
+        mask_counts = np.bincount(frame_info)
+        if mask_counts.size == 0:
+            continue
+        invalid_cnt = mask_counts[0] if mask_counts.shape[0] > 0 else 0
+        total_cnt = frame_info.size
+        if total_cnt == 0:
+            continue
+        if invalid_cnt / total_cnt > mask_visible_threshold:
+            continue
+        mask_counts[0] = 0
+        if mask_counts.sum() == 0:
+            continue
+        best_mask_id = int(mask_counts.argmax())
+        best_cnt = mask_counts[best_mask_id]
+        valid_cnt = total_cnt - invalid_cnt
+        if valid_cnt <= 0:
+            continue
         visible_num += 1
-        contained_ratio = overlap_mask_cnts[0] / overlap_mask_cnts.sum()
+        contained_ratio = best_cnt / valid_cnt
         if contained_ratio > contained_threshold:
-            frame_mask_idx = global_frame_mask_list.index((frame_id, overlap_mask_ids[0]))
+            frame_mask_idx = frame_mask_to_index.get((int(frame_id), best_mask_id))
+            if frame_mask_idx is None:
+                continue
             contained_mask[frame_mask_idx] = True
             visible_frame[frame_id] = True
         else:
@@ -168,17 +186,18 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     mask_gaussian_pclds = tracker["mask_gaussian_pclds"]
     global_frame_mask_list = tracker["global_frame_mask_list"]
 
+    frame_mask_to_index = {(int(frame_id), int(mask_id)): idx for idx, (frame_id, mask_id) in enumerate(global_frame_mask_list)}
+
     num_points = gaussian_in_frame_matrix.shape[0]
-    num_masks = len(global_frame_mask_list)
-    global_gaussian_in_mask_matrix = np.zeros((num_points, num_masks), dtype=bool)
     gaussian_in_frame_maskid_matrix = np.zeros((num_points, gaussian_in_frame_matrix.shape[1]), dtype=np.uint16)
 
     for mask_idx, (frame_id, mask_id) in enumerate(global_frame_mask_list):
         ids = mask_gaussian_pclds[f"{frame_id}_{mask_id}"]
-        global_gaussian_in_mask_matrix[ids, mask_idx] = True
         gaussian_in_frame_maskid_matrix[ids, frame_id] = mask_id
 
-    mask_visible_frames = compute_mask_visible_frame(global_gaussian_in_mask_matrix, gaussian_in_frame_matrix)
+    mask_visible_frames = compute_mask_visible_frame(
+        mask_gaussian_pclds, global_frame_mask_list, gaussian_in_frame_matrix
+    )
 
     contained_masks = []
     visible_frames = []
@@ -190,7 +209,8 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
             mask_gaussian_pclds,
             f"{frame_id}_{mask_id}",
             mask_visible_frames[mask_cnts],
-            global_frame_mask_list,
+            frame_mask_to_index,
+            len(global_frame_mask_list),
         )
         contained_masks.append(contained_mask)
         visible_frames.append(visible_frame)
