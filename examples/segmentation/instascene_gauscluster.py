@@ -453,25 +453,40 @@ def remedy_undersegment(
     error_undersegment_frame_masks = {}
     remedy_undersegment_frame_masks = []
 
-    instance_seg3D_labels = [set(point_ids) for point_ids in tracker["total_point_ids_list"]]
-    frames_gaussian = []
-    for frame_id in range(tracker["gaussian_in_frame_matrix"].shape[1]):
-        frames_gaussian.append(set(np.where(tracker["gaussian_in_frame_matrix"][:, frame_id])[0]))
+    total_instances = len(tracker["total_point_ids_list"])
+    if total_instances == 0:
+        tracker["undersegment_mask_ids"] = remedy_undersegment_frame_masks
+        return tracker
+
+    num_points = tracker["gaussian_in_frame_matrix"].shape[0]
+    gaussian_to_instance = np.full(num_points, -1, dtype=np.int32)
+    for inst_idx, point_ids in enumerate(tracker["total_point_ids_list"]):
+        if len(point_ids) == 0:
+            continue
+        gaussian_to_instance[np.asarray(point_ids, dtype=np.int64)] = inst_idx
+
+    frame_mask_to_index = {
+        tuple(frame_mask): idx for idx, frame_mask in enumerate(tracker["global_frame_mask_list"])
+    }
 
     for frame_mask in tqdm(undersegment_frame_masks, desc="修补欠分割 mask"):
         frame_id, mask_id = frame_mask
         frame_mask_gaussian = tracker["mask_gaussian_pclds"][f"{frame_id}_{mask_id}"]
-        frame_gaussian = frames_gaussian[frame_id]
-        instance_frame_gaussian = [seg3D_labels.intersection(frame_gaussian) for seg3D_labels in instance_seg3D_labels]
-        instance_intersect_gaussian = np.array(
-            [len(set(frame_mask_gaussian).intersection(instance_gaussian)) for instance_gaussian in instance_frame_gaussian]
-        )
-        best_match_instance_idx = np.argsort(instance_intersect_gaussian)[::-1]
-        best_match_intersect = instance_intersect_gaussian[best_match_instance_idx[0]]
+        if len(frame_mask_gaussian) == 0:
+            remedy_undersegment_frame_masks.append(frame_mask_to_index[tuple(frame_mask)])
+            continue
+        instance_ids = gaussian_to_instance[np.asarray(frame_mask_gaussian, dtype=np.int64)]
+        instance_ids = instance_ids[instance_ids >= 0]
+        if instance_ids.size == 0:
+            remedy_undersegment_frame_masks.append(frame_mask_to_index[tuple(frame_mask)])
+            continue
+        counts = np.bincount(instance_ids, minlength=total_instances)
+        best_match_instance_idx = int(counts.argmax())
+        best_match_intersect = int(counts[best_match_instance_idx])
         if best_match_intersect / len(frame_mask_gaussian) > threshold:
-            error_undersegment_frame_masks[frame_mask] = best_match_instance_idx[0]
+            error_undersegment_frame_masks[frame_mask] = best_match_instance_idx
         else:
-            remedy_undersegment_frame_masks.append(tracker["global_frame_mask_list"].index(frame_mask))
+            remedy_undersegment_frame_masks.append(frame_mask_to_index[tuple(frame_mask)])
 
     tracker["undersegment_mask_ids"] = remedy_undersegment_frame_masks
     total_mask_list = tracker["total_mask_list"]
