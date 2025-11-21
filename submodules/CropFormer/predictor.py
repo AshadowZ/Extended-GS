@@ -17,7 +17,11 @@ from detectron2.engine.defaults import DefaultPredictor
 from detectron2.utils.video_visualizer import VideoVisualizer
 from detectron2.utils.visualizer import ColorMode, Visualizer
 
-from mask2former.data.dataset_mappers.crop_augmentations import BatchResizeShortestEdge, EntityCrop, EntityCropTransform
+from mask2former.data.dataset_mappers.crop_augmentations import (
+    BatchResizeShortestEdge,
+    EntityCrop,
+    EntityCropTransform,
+)
 
 
 class VisualizationDemo(object):
@@ -54,13 +58,13 @@ class VisualizationDemo(object):
         predictions = self.predictor(image)
         return predictions
 
+
 class CropFormerPredictor(DefaultPredictor):
-    """
-    """
+    """ """
 
     def __init__(self, cfg):
         super().__init__(cfg)
-    
+
     def generate_img_augs(self):
         shortest_side = np.random.choice([self.cfg.INPUT.MIN_SIZE_TEST])
 
@@ -70,18 +74,23 @@ class CropFormerPredictor(DefaultPredictor):
                 self.cfg.INPUT.MAX_SIZE_TEST,
                 self.cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING,
             ),
-            
         ]
 
         # Build original image augmentation
         crop_augs = []
-        entity_crops = EntityCrop(self.cfg.ENTITY.CROP_AREA_RATIO, 
-                                    self.cfg.ENTITY.CROP_STRIDE_RATIO,
-                                    self.cfg.ENTITY.CROP_SAMPLE_NUM_TEST, 
-                                    False)
+        entity_crops = EntityCrop(
+            self.cfg.ENTITY.CROP_AREA_RATIO,
+            self.cfg.ENTITY.CROP_STRIDE_RATIO,
+            self.cfg.ENTITY.CROP_SAMPLE_NUM_TEST,
+            False,
+        )
         crop_augs.append(entity_crops)
-        
-        entity_resize = BatchResizeShortestEdge((shortest_side,), self.cfg.INPUT.MAX_SIZE_TEST, self.cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING)
+
+        entity_resize = BatchResizeShortestEdge(
+            (shortest_side,),
+            self.cfg.INPUT.MAX_SIZE_TEST,
+            self.cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING,
+        )
         crop_augs.append(entity_resize)
 
         # augs      = T.AugmentationList(augs)
@@ -103,7 +112,7 @@ class CropFormerPredictor(DefaultPredictor):
             if self.input_format == "RGB":
                 # whether the model expects BGR inputs or RGB
                 original_image = original_image[:, :, ::-1]
-            
+
             # build cropformer augmentations
             augs, crop_augs = self.generate_img_augs()
 
@@ -117,24 +126,28 @@ class CropFormerPredictor(DefaultPredictor):
             aug_input_crop = T.AugInput(copy.deepcopy(original_image))
             transforms_crop = crop_augs(aug_input_crop)
             image_crop = aug_input_crop.image
-            assert len(image_crop.shape)==4, "the image shape must be [N, H, W, C]"
-            image_crop = torch.as_tensor(image_crop.astype("float32").transpose(0, 3, 1, 2))
-            
+            assert len(image_crop.shape) == 4, "the image shape must be [N, H, W, C]"
+            image_crop = torch.as_tensor(
+                image_crop.astype("float32").transpose(0, 3, 1, 2)
+            )
+
             for transform_type in transforms_crop:
                 if isinstance(transform_type, EntityCropTransform):
                     crop_axises = transform_type.crop_axises
                     crop_indexes = transform_type.crop_indexes
 
-            inputs = {"image": image_ori, 
-                      "height": height, 
-                      "width": width,
-                      "image_crop": image_crop,
-                      "crop_region": crop_axises,
-                      "crop_indexes": crop_indexes
-                      }
+            inputs = {
+                "image": image_ori,
+                "height": height,
+                "width": width,
+                "image_crop": image_crop,
+                "crop_region": crop_axises,
+                "crop_indexes": crop_indexes,
+            }
             # pdb.set_trace()
             predictions = self.model([inputs])[0]
             return predictions
+
 
 class AsyncPredictor:
     """

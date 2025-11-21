@@ -12,13 +12,17 @@ import time
 import threading
 from queue import Queue
 
-cmd = 'nvidia-smi -q -d Memory |grep -A4 GPU|grep Used'
-result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE).stdout.decode().split('\n')
-os.environ['CUDA_VISIBLE_DEVICES'] = str(np.argmin([int(x.split()[2]) for x in result[:-1]]))
+cmd = "nvidia-smi -q -d Memory |grep -A4 GPU|grep Used"
+result = (
+    subprocess.run(cmd, shell=True, stdout=subprocess.PIPE).stdout.decode().split("\n")
+)
+os.environ["CUDA_VISIBLE_DEVICES"] = str(
+    np.argmin([int(x.split()[2]) for x in result[:-1]])
+)
 
-os.system('echo $CUDA_VISIBLE_DEVICES')
+os.system("echo $CUDA_VISIBLE_DEVICES")
 
-sys.path.insert(1, os.path.join(sys.path[0], '..'))
+sys.path.insert(1, os.path.join(sys.path[0], ".."))
 
 import warnings
 from tqdm import tqdm
@@ -49,7 +53,9 @@ def setup_cfg(args):
 
 
 def get_boundary(mask, kernel_size_erode=5):
-    kernel_erode = np.ones((kernel_size_erode, kernel_size_erode), np.uint8)  # rubbish -> 15
+    kernel_erode = np.ones(
+        (kernel_size_erode, kernel_size_erode), np.uint8
+    )  # rubbish -> 15
     mask = np.float32(mask)  # 255
     mask = mask - cv2.erode(mask, kernel_erode, iterations=1)
 
@@ -57,7 +63,9 @@ def get_boundary(mask, kernel_size_erode=5):
 
 
 def vis_mask(image, masks):
-    colors = np.random.rand(len(masks), 3)  # plt.cm.hsv(np.linspace(0, 1, masks.max() + 1))[:, :3]
+    colors = np.random.rand(
+        len(masks), 3
+    )  # plt.cm.hsv(np.linspace(0, 1, masks.max() + 1))[:, :3]
     image_copy = image.copy()
     for mask_id, mask in enumerate(masks):
         # ensure mask is boolean for safe array indexing
@@ -74,15 +82,24 @@ def vis_mask(image, masks):
             y_max, x_max = mask_coords.max(axis=0)
 
             # Draw the bounding box on the overlay image
-            cv2.rectangle(image_copy, (x_min, y_min), (x_max, y_max),
-                          (int(color[0]), int(color[1]), int(color[2])),
-                          thickness=1)
+            cv2.rectangle(
+                image_copy,
+                (x_min, y_min),
+                (x_max, y_max),
+                (int(color[0]), int(color[1]), int(color[2])),
+                thickness=1,
+            )
 
             # Annotate the mask ID in the bounding box
-            cv2.putText(image_copy, f"ID: {mask_id}", (x_min + 5, y_min + 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (int(color[0]), int(color[1]), int(color[2])),
-                        max(1, 2))
+            cv2.putText(
+                image_copy,
+                f"ID: {mask_id}",
+                (x_min + 5, y_min + 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (int(color[0]), int(color[1]), int(color[2])),
+                max(1, 2),
+            )
 
     return image_copy
 
@@ -127,18 +144,9 @@ def get_parser():
         metavar="FILE",
         help="path to config file",
     )
-    parser.add_argument(
-        "--scene_dir",
-        type=str
-    )
-    parser.add_argument(
-        "--image_path_pattern",
-        type=str
-    )
-    parser.add_argument(
-        "--dataset",
-        type=str
-    )
+    parser.add_argument("--scene_dir", type=str)
+    parser.add_argument("--image_path_pattern", type=str)
+    parser.add_argument("--dataset", type=str)
     parser.add_argument(
         "--confidence-threshold",
         type=float,
@@ -165,8 +173,8 @@ if __name__ == "__main__":
     image_list = sorted(glob.glob(os.path.join(seq_dir, args.image_path_pattern)))
     print(os.path.join(seq_dir, args.image_path_pattern))
 
-    output_vis_dir = os.path.join(seq_dir, 'sam_vis/mask')
-    output_seg_dir = os.path.join(seq_dir, 'sam/mask')
+    output_vis_dir = os.path.join(seq_dir, "sam_vis/mask")
+    output_seg_dir = os.path.join(seq_dir, "sam/mask")
     os.makedirs(output_vis_dir, exist_ok=True)
     os.makedirs(output_seg_dir, exist_ok=True)
 
@@ -195,7 +203,7 @@ if __name__ == "__main__":
             # move masks/scores to CPU and apply threshold filter here
             pred_masks_cpu = pred_masks.cpu()
             pred_scores_cpu = pred_scores.cpu()
-            selected_indexes = (pred_scores_cpu >= args.confidence_threshold)
+            selected_indexes = pred_scores_cpu >= args.confidence_threshold
             selected_scores = pred_scores_cpu[selected_indexes]
             selected_masks = pred_masks_cpu[selected_indexes]
 
@@ -220,14 +228,18 @@ if __name__ == "__main__":
 
             # t_save_seg_start = time.perf_counter()
             cv2.imwrite(
-                os.path.join(output_seg_dir, os.path.basename(path).split('.')[0] + '.png'),
+                os.path.join(
+                    output_seg_dir, os.path.basename(path).split(".")[0] + ".png"
+                ),
                 mask_image,
                 [cv2.IMWRITE_PNG_COMPRESSION, 1],  # lower compression for faster write
             )
             # t_save_seg = time.perf_counter() - t_save_seg_start
 
             # t_vis_start = time.perf_counter()
-            save_vis_file = os.path.join(output_vis_dir, os.path.basename(path).split('.')[0] + '.png')
+            save_vis_file = os.path.join(
+                output_vis_dir, os.path.basename(path).split(".")[0] + ".png"
+            )
             img_rgb = img_bgr[:, :, ::-1]  # convert in writer
             vis_img = vis_mask_fast(img_rgb, mask_image)  # RGB
             cv2.imwrite(

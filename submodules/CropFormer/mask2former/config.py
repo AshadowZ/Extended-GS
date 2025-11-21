@@ -91,7 +91,9 @@ def add_maskformer2_config(cfg):
 
     # NOTE: maskformer2 extra configs
     # transformer module
-    cfg.MODEL.MASK_FORMER.TRANSFORMER_DECODER_NAME = "MultiScaleMaskedTransformerDecoder"
+    cfg.MODEL.MASK_FORMER.TRANSFORMER_DECODER_NAME = (
+        "MultiScaleMaskedTransformerDecoder"
+    )
 
     # LSJ aug
     cfg.INPUT.IMAGE_SIZE = 1024
@@ -99,7 +101,11 @@ def add_maskformer2_config(cfg):
     cfg.INPUT.MAX_SCALE = 2.0
 
     # MSDeformAttn encoder configs
-    cfg.MODEL.SEM_SEG_HEAD.DEFORMABLE_TRANSFORMER_ENCODER_IN_FEATURES = ["res3", "res4", "res5"]
+    cfg.MODEL.SEM_SEG_HEAD.DEFORMABLE_TRANSFORMER_ENCODER_IN_FEATURES = [
+        "res3",
+        "res4",
+        "res5",
+    ]
     cfg.MODEL.SEM_SEG_HEAD.DEFORMABLE_TRANSFORMER_ENCODER_N_POINTS = 4
     cfg.MODEL.SEM_SEG_HEAD.DEFORMABLE_TRANSFORMER_ENCODER_N_HEADS = 8
 
@@ -134,6 +140,11 @@ def add_maskformer2_config(cfg):
     cfg.MODEL.HORNET = CN()
     cfg.MODEL.HORNET.DEPTHS = [2, 3, 18, 2]
     cfg.MODEL.HORNET.BASE_DIM = 192
-    cfg.MODEL.HORNET.GCONV = ['partial(gnconv, order=2, s=1/3)', 'partial(gnconv, order=3, s=1/3)', 'partial(gnconv, order=4, s=1/3, h=24, w=13, gflayer=GlobalLocalFilter)', 'partial(gnconv, order=5, s=1/3, h=12, w=7, gflayer=GlobalLocalFilter)']
-    cfg.MODEL.HORNET.DROP_PATH_RATE=0.6
+    cfg.MODEL.HORNET.GCONV = [
+        "partial(gnconv, order=2, s=1/3)",
+        "partial(gnconv, order=3, s=1/3)",
+        "partial(gnconv, order=4, s=1/3, h=24, w=13, gflayer=GlobalLocalFilter)",
+        "partial(gnconv, order=5, s=1/3, h=12, w=7, gflayer=GlobalLocalFilter)",
+    ]
+    cfg.MODEL.HORNET.DROP_PATH_RATE = 0.6
     cfg.MODEL.HORNET.OUT_FEATURES = ["res2", "res3", "res4", "res5"]

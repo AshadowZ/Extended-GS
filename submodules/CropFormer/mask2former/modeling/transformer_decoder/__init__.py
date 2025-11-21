@@ -2,4 +2,3 @@
 from .maskformer_transformer_decoder import StandardTransformerDecoder
 from .mask2former_transformer_decoder import MultiScaleMaskedTransformerDecoder
 from .cropformer_transformer_decoder import CropSharedMultiScaleMaskedTransformerDecoder
-

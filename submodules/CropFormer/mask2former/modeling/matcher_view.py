@@ -11,6 +11,7 @@ from torch.cuda.amp import autocast
 
 from detectron2.projects.point_rend.point_features import point_sample
 
+
 def batch_dice_loss(inputs: torch.Tensor, targets: torch.Tensor):
     """
     Compute the DICE loss, similar to generalized IOU for masks
@@ -29,9 +30,7 @@ def batch_dice_loss(inputs: torch.Tensor, targets: torch.Tensor):
     return loss
 
 
-batch_dice_loss_jit = torch.jit.script(
-    batch_dice_loss
-)  # type: torch.jit.ScriptModule
+batch_dice_loss_jit = torch.jit.script(batch_dice_loss)  # type: torch.jit.ScriptModule
 
 
 def batch_sigmoid_ce_loss(inputs: torch.Tensor, targets: torch.Tensor):
@@ -74,7 +73,13 @@ class ViewHungarianMatcher(nn.Module):
     while the others are un-matched (and thus treated as non-objects).
     """
 
-    def __init__(self, cost_class: float = 1, cost_mask: float = 1, cost_dice: float = 1, num_points: int = 0):
+    def __init__(
+        self,
+        cost_class: float = 1,
+        cost_mask: float = 1,
+        cost_dice: float = 1,
+        num_points: int = 0,
+    ):
         """Creates the matcher
 
         Params:
@@ -87,7 +92,9 @@ class ViewHungarianMatcher(nn.Module):
         self.cost_mask = cost_mask
         self.cost_dice = cost_dice
 
-        assert cost_class != 0 or cost_mask != 0 or cost_dice != 0, "all costs cant be 0"
+        assert (
+            cost_class != 0 or cost_mask != 0 or cost_dice != 0
+        ), "all costs cant be 0"
 
         self.num_points = num_points
 
@@ -102,7 +109,9 @@ class ViewHungarianMatcher(nn.Module):
 
         # Iterate through batch size
         for b in range(bs):
-            out_prob = outputs["pred_logits"][b].softmax(-1)  # [num_queries, num_classes]
+            out_prob = outputs["pred_logits"][b].softmax(
+                -1
+            )  # [num_queries, num_classes]
             ## out_prob: [100, 41], 100个query, 40类+background类
             tgt_ids = targets[b]["labels"]
             ## tgt_ids: tensor([ 3, 10]), 说明只有两个ground truth
@@ -125,7 +134,9 @@ class ViewHungarianMatcher(nn.Module):
             # get gt labels
             tgt_mask = point_sample(
                 tgt_mask,
-                point_coords.repeat(tgt_mask.shape[0], 1, 1), ## repeat了一份, torch.Size([2, 12544, 2]), 每一帧采样的位置都是一样的
+                point_coords.repeat(
+                    tgt_mask.shape[0], 1, 1
+                ),  ## repeat了一份, torch.Size([2, 12544, 2]), 每一帧采样的位置都是一样的
                 align_corners=False,
             ).flatten(1)
 
@@ -139,11 +150,15 @@ class ViewHungarianMatcher(nn.Module):
                 out_mask = out_mask.float()  ## out_mask: torch.Size([100, 25088])
                 tgt_mask = tgt_mask.float()  ## tgt_mask: torch.Size([2, 25088])
                 # Compute the focal loss between masks
-                cost_mask = batch_sigmoid_ce_loss_jit(out_mask, tgt_mask) ## cost_mask: torch.Size([100, 2])
+                cost_mask = batch_sigmoid_ce_loss_jit(
+                    out_mask, tgt_mask
+                )  ## cost_mask: torch.Size([100, 2])
 
                 # Compute the dice loss betwen masks
-                cost_dice = batch_dice_loss_jit(out_mask, tgt_mask) ## cost_dice: torch.Size([100, 2])
-            
+                cost_dice = batch_dice_loss_jit(
+                    out_mask, tgt_mask
+                )  ## cost_dice: torch.Size([100, 2])
+
             # Final cost matrix
             C = (
                 self.cost_mask * cost_mask
@@ -156,7 +171,10 @@ class ViewHungarianMatcher(nn.Module):
             ## [(array([17, 33]), array([1, 0]), ...]
 
         return [
-            (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
+            (
+                torch.as_tensor(i, dtype=torch.int64),
+                torch.as_tensor(j, dtype=torch.int64),
+            )
             for i, j in indices
         ]
 
