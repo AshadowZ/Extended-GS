@@ -764,9 +764,7 @@ def rasterization(
                     viewmats_rs=viewmats_rs,
                 )
             else:
-                track_chunk = (
-                    track_pixel_gaussians and tracked_pixel_gaussians is None
-                )
+                track_chunk = track_pixel_gaussians and tracked_pixel_gaussians is None
                 (
                     render_colors_,
                     render_alphas_,

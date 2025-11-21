@@ -90,10 +90,19 @@ class Node:
             contained_mask[contained_mask > 1] = 1
             contained_mask = csr_matrix(contained_mask)
 
-        return Node(mask_list, visible_frame, contained_mask, point_ids, node_info, son_node_info)
+        return Node(
+            mask_list,
+            visible_frame,
+            contained_mask,
+            point_ids,
+            node_info,
+            son_node_info,
+        )
 
 
-def compute_mask_visible_frame(global_gaussian_in_mask_matrix, gaussian_in_frame_matrix, threshold=0.0):
+def compute_mask_visible_frame(
+    global_gaussian_in_mask_matrix, gaussian_in_frame_matrix, threshold=0.0
+):
     """Use sparse matrix multiplication to determine mask visibility per frame."""
     print("[Mask Visibility] 使用稀疏矩阵计算 mask 可见帧 ...")
     A = global_gaussian_in_mask_matrix.astype(np.float32)
@@ -105,7 +114,9 @@ def compute_mask_visible_frame(global_gaussian_in_mask_matrix, gaussian_in_frame
     mask_point_counts = np.array(A.sum(axis=0)).ravel() + 1e-6
 
     intersection_counts = intersection_counts.tocoo()
-    visibility = (intersection_counts.data / mask_point_counts[intersection_counts.row]) > threshold
+    visibility = (
+        intersection_counts.data / mask_point_counts[intersection_counts.row]
+    ) > threshold
 
     result = csr_matrix(
         (
@@ -172,7 +183,10 @@ def judge_single_mask(
         else:
             split_num += 1
 
-    if visible_num == 0 or split_num / max(visible_num, 1) > undersegment_filter_threshold:
+    if (
+        visible_num == 0
+        or split_num / max(visible_num, 1) > undersegment_filter_threshold
+    ):
         return False, contained_mask, visible_frame
     else:
         return True, contained_mask, visible_frame
@@ -218,12 +232,20 @@ def cluster_into_new_nodes(iteration, old_nodes, graph):
     new_nodes = []
     for component in nx.connected_components(graph):
         node_info = (iteration, len(new_nodes))
-        new_nodes.append(Node.create_node_from_list([old_nodes[node] for node in component], node_info))
+        new_nodes.append(
+            Node.create_node_from_list(
+                [old_nodes[node] for node in component], node_info
+            )
+        )
     return new_nodes
 
 
 def iterative_clustering(nodes, observer_num_thresholds, connect_threshold):
-    iterator = tqdm(enumerate(observer_num_thresholds), total=len(observer_num_thresholds), desc="迭代聚类")
+    iterator = tqdm(
+        enumerate(observer_num_thresholds),
+        total=len(observer_num_thresholds),
+        desc="迭代聚类",
+    )
     for iterate_id, observer_num_threshold in iterator:
         graph = update_graph(nodes, observer_num_threshold, connect_threshold)
         nodes = cluster_into_new_nodes(iterate_id + 1, nodes, graph)
@@ -235,10 +257,15 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     mask_gaussian_pclds = tracker["mask_gaussian_pclds"]
     global_frame_mask_list = tracker["global_frame_mask_list"]
 
-    frame_mask_to_index = {(int(frame_id), int(mask_id)): idx for idx, (frame_id, mask_id) in enumerate(global_frame_mask_list)}
+    frame_mask_to_index = {
+        (int(frame_id), int(mask_id)): idx
+        for idx, (frame_id, mask_id) in enumerate(global_frame_mask_list)
+    }
 
     num_points = gaussian_in_frame_matrix.shape[0]
-    gaussian_in_frame_maskid_matrix = np.zeros((num_points, gaussian_in_frame_matrix.shape[1]), dtype=np.uint16)
+    gaussian_in_frame_maskid_matrix = np.zeros(
+        (num_points, gaussian_in_frame_matrix.shape[1]), dtype=np.uint16
+    )
 
     mask_rows: List[np.ndarray] = []
     mask_cols: List[np.ndarray] = []
@@ -273,7 +300,9 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     visible_frames = []
     undersegment_mask_ids = []
 
-    for mask_cnts, (frame_id, mask_id) in enumerate(tqdm(global_frame_mask_list, desc="过滤欠分割 Mask")):
+    for mask_cnts, (frame_id, mask_id) in enumerate(
+        tqdm(global_frame_mask_list, desc="过滤欠分割 Mask")
+    ):
         valid, contained_mask, visible_frame = judge_single_mask(
             gaussian_in_frame_maskid_matrix,
             mask_gaussian_pclds,
@@ -315,7 +344,9 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
         mask_list = [(frame_id, mask_id)]
         frame = visible_frames_sparse.getrow(global_mask_id)
         frame_mask = contained_masks_sparse.getrow(global_mask_id)
-        point_ids = np.unique(np.asarray(mask_gaussian_pclds[f"{frame_id}_{mask_id}"], dtype=np.int64))
+        point_ids = np.unique(
+            np.asarray(mask_gaussian_pclds[f"{frame_id}_{mask_id}"], dtype=np.int64)
+        )
         node_info = (0, len(nodes))
         node = Node(mask_list, frame, frame_mask, point_ids, node_info, None)
         nodes.append(node)
@@ -373,7 +404,9 @@ def dbscan_process(
     return pcld_list, point_ids_list
 
 
-def merge_overlapping_objects(total_point_ids_list, total_bbox_list, total_mask_list, overlapping_ratio=0.8):
+def merge_overlapping_objects(
+    total_point_ids_list, total_bbox_list, total_mask_list, overlapping_ratio=0.8
+):
     total_object_num = len(total_point_ids_list)
     invalid_object = np.zeros(total_object_num, dtype=bool)
     for i in range(total_object_num):
@@ -424,9 +457,13 @@ def filter_point(
     point_appear_in_node_matrixs = []
     for point_ids in point_ids_list:
         point_appear_in_video_matrix = point_frame_matrix[point_ids, :]
-        point_appear_in_video_matrix = point_appear_in_video_matrix[:, node_global_frame_id_list]
+        point_appear_in_video_matrix = point_appear_in_video_matrix[
+            :, node_global_frame_id_list
+        ]
         point_appear_in_video_nums.append(np.sum(point_appear_in_video_matrix, axis=1))
-        point_appear_in_node_matrix = np.zeros_like(point_appear_in_video_matrix, dtype=bool)
+        point_appear_in_node_matrix = np.zeros_like(
+            point_appear_in_video_matrix, dtype=bool
+        )
         point_appear_in_node_matrixs.append(point_appear_in_node_matrix)
 
     object_mask_list = [[] for _ in range(len(point_ids_list))]
@@ -437,21 +474,32 @@ def filter_point(
         mask_point_ids = list(mask_point_clouds[f"{frame_id}_{mask_id}"])
         for idx_obj, point_ids in enumerate(point_ids_list):
             point_ids_within_object = np.where(np.isin(point_ids, mask_point_ids))[0]
-            point_appear_in_node_matrixs[idx_obj][point_ids_within_object, frame_id_in_list] = True
+            point_appear_in_node_matrixs[idx_obj][
+                point_ids_within_object, frame_id_in_list
+            ] = True
             if len(point_ids_within_object) > 0:
-                object_mask_list[idx_obj].append((frame_id, mask_id, len(point_ids_within_object) / len(point_ids)))
+                object_mask_list[idx_obj].append(
+                    (frame_id, mask_id, len(point_ids_within_object) / len(point_ids))
+                )
 
     filtered_point_ids, filtered_bbox_list, filtered_mask_list = [], [], []
     for i, (point_appear_in_video_num, point_appear_in_node_matrix) in enumerate(
         zip(point_appear_in_video_nums, point_appear_in_node_matrixs)
     ):
-        detection_ratio = np.sum(point_appear_in_node_matrix, axis=1) / (point_appear_in_video_num + 1e-6)
+        detection_ratio = np.sum(point_appear_in_node_matrix, axis=1) / (
+            point_appear_in_video_num + 1e-6
+        )
         valid_point_ids = np.where(detection_ratio > point_filter_threshold)[0]
         if len(valid_point_ids) == 0 or len(object_mask_list[i]) < 2:
             continue
         filtered_point_ids.append(point_ids_list[i][valid_point_ids])
         pcld = pcld_list[i]
-        filtered_bbox_list.append([np.amin(np.asarray(pcld.points), axis=0), np.amax(np.asarray(pcld.points), axis=0)])
+        filtered_bbox_list.append(
+            [
+                np.amin(np.asarray(pcld.points), axis=0),
+                np.amax(np.asarray(pcld.points), axis=0),
+            ]
+        )
         filtered_mask_list.append(object_mask_list[i])
     return filtered_point_ids, filtered_bbox_list, filtered_mask_list
 
@@ -477,7 +525,9 @@ def post_process_clusters(
         if len(node.mask_list) < 2:
             continue
         node_point_ids = node.point_ids.tolist()
-        pcld = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(scene_points[node_point_ids]))
+        pcld = o3d.geometry.PointCloud(
+            o3d.utility.Vector3dVector(scene_points[node_point_ids])
+        )
         if True:
             pcld_list, point_ids_list = dbscan_process(
                 pcld,
@@ -501,7 +551,10 @@ def post_process_clusters(
         total_mask_list.extend(mask_list)
 
     total_point_ids_list, total_mask_list = merge_overlapping_objects(
-        total_point_ids_list, total_bbox_list, total_mask_list, overlapping_ratio=overlap_ratio
+        total_point_ids_list,
+        total_bbox_list,
+        total_mask_list,
+        overlapping_ratio=overlap_ratio,
     )
 
     tracker.update(
@@ -518,7 +571,10 @@ def remedy_undersegment(
     threshold: float = 0.8,
 ) -> Dict:
     """尝试将欠分割的 mask 分配到最匹配的实例中。"""
-    undersegment_frame_masks = [tracker["global_frame_mask_list"][fid] for fid in tracker["undersegment_mask_ids"]]
+    undersegment_frame_masks = [
+        tracker["global_frame_mask_list"][fid]
+        for fid in tracker["undersegment_mask_ids"]
+    ]
     error_undersegment_frame_masks = {}
     remedy_undersegment_frame_masks = []
 
@@ -535,19 +591,26 @@ def remedy_undersegment(
         gaussian_to_instance[np.asarray(point_ids, dtype=np.int64)] = inst_idx
 
     frame_mask_to_index = {
-        tuple(frame_mask): idx for idx, frame_mask in enumerate(tracker["global_frame_mask_list"])
+        tuple(frame_mask): idx
+        for idx, frame_mask in enumerate(tracker["global_frame_mask_list"])
     }
 
     for frame_mask in tqdm(undersegment_frame_masks, desc="修补欠分割 mask"):
         frame_id, mask_id = frame_mask
         frame_mask_gaussian = tracker["mask_gaussian_pclds"][f"{frame_id}_{mask_id}"]
         if len(frame_mask_gaussian) == 0:
-            remedy_undersegment_frame_masks.append(frame_mask_to_index[tuple(frame_mask)])
+            remedy_undersegment_frame_masks.append(
+                frame_mask_to_index[tuple(frame_mask)]
+            )
             continue
-        instance_ids = gaussian_to_instance[np.asarray(frame_mask_gaussian, dtype=np.int64)]
+        instance_ids = gaussian_to_instance[
+            np.asarray(frame_mask_gaussian, dtype=np.int64)
+        ]
         instance_ids = instance_ids[instance_ids >= 0]
         if instance_ids.size == 0:
-            remedy_undersegment_frame_masks.append(frame_mask_to_index[tuple(frame_mask)])
+            remedy_undersegment_frame_masks.append(
+                frame_mask_to_index[tuple(frame_mask)]
+            )
             continue
         counts = np.bincount(instance_ids, minlength=total_instances)
         best_match_instance_idx = int(counts.argmax())
@@ -555,7 +618,9 @@ def remedy_undersegment(
         if best_match_intersect / len(frame_mask_gaussian) > threshold:
             error_undersegment_frame_masks[frame_mask] = best_match_instance_idx
         else:
-            remedy_undersegment_frame_masks.append(frame_mask_to_index[tuple(frame_mask)])
+            remedy_undersegment_frame_masks.append(
+                frame_mask_to_index[tuple(frame_mask)]
+            )
 
     tracker["undersegment_mask_ids"] = remedy_undersegment_frame_masks
     total_mask_list = tracker["total_mask_list"]
@@ -983,9 +1048,7 @@ def main():
     print(f"有像素贡献的 Gaussian 总计: {total_points_hit}")
     for i, (frame_id, mask_id) in enumerate(tracker["global_frame_mask_list"][:5]):
         gs_ids = tracker["mask_gaussian_pclds"][f"{frame_id}_{mask_id}"]
-        print(
-            f"  • frame {frame_id:03d}, mask {mask_id}: 高斯数 {len(gs_ids)}"
-        )
+        print(f"  • frame {frame_id:03d}, mask {mask_id}: 高斯数 {len(gs_ids)}")
     print("=============================================")
 
     # 阶段二：迭代聚类

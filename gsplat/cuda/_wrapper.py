@@ -98,10 +98,7 @@ def world_to_cam(
     means: Tensor,  # [..., N, 3]
     covars: Tensor,  # [..., N, 3, 3]
     viewmats: Tensor,  # [..., C, 4, 4]
-) -> Union[
-    Tuple[Tensor, Tensor, Tensor],
-    Tuple[Tensor, Tensor, Tensor, Tensor],
-]:
+) -> Union[Tuple[Tensor, Tensor, Tensor], Tuple[Tensor, Tensor, Tensor, Tensor],]:
     """Transforms Gaussians from world to camera coordinate system.
 
     Args:
@@ -669,7 +666,12 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas, render_median, pixel_gaussians = _RasterizeToPixels.apply(
+    (
+        render_colors,
+        render_alphas,
+        render_median,
+        pixel_gaussians,
+    ) = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
