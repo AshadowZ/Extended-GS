@@ -728,7 +728,9 @@ def collect_view_data(
     image_hw_cache: Dict[str, Tuple[int, int]] = {}
     indices = dataset.indices
 
-    for local_idx, parser_idx in enumerate(indices):
+    pbar = tqdm(range(len(indices)), desc="[Cameras] 准备视角", total=len(indices))
+    for local_idx in pbar:
+        parser_idx = indices[local_idx]
         image_path = parser.image_paths[parser_idx]
         image_name = Path(image_path).stem
 
@@ -761,24 +763,18 @@ def collect_view_data(
                     f"Mask 尺寸 {mask_h}x{mask_w} 与相机解析到的尺寸 {height}x{width} "
                     f"以及原始图像尺寸 {actual_h}x{actual_w} 均不一致：{mask_path}"
                 )
-        view_data.append(
-            {
-                "index": int(parser_idx),
-                "image_name": image_name,
-                "image_path": image_path,
-                "width": int(width),
-                "height": int(height),
-                "K": torch.from_numpy(K).float(),
-                "camtoworld": torch.from_numpy(camtoworld).float(),
-                "mask_path": mask_path,
-            }
-        )
-
-        if (local_idx + 1) % 20 == 0 or (local_idx + 1) == len(indices):
-            print(
-                f"[Cameras] Prepared {local_idx + 1}/{len(indices)} views "
-                f"(current: {image_name})"
-                )
+        view_entry = {
+            "index": int(parser_idx),
+            "image_name": image_name,
+            "image_path": image_path,
+            "width": int(width),
+            "height": int(height),
+            "K": torch.from_numpy(K).float(),
+            "camtoworld": torch.from_numpy(camtoworld).float(),
+            "mask_path": mask_path,
+        }
+        view_data.append(view_entry)
+        pbar.set_postfix_str(f"{local_idx + 1}/{len(indices)} current: {image_name}")
 
     return view_data
 
