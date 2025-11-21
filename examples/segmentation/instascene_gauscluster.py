@@ -737,6 +737,23 @@ def build_mask_gaussian_tracker(
     opacities_d = opacities.to(device)
     colors_d = colors.to(device)
 
+    if device.type == "cuda":
+        tensors = {
+            "means": means_d,
+            "quats": quats_d,
+            "scales": scales_d,
+            "opacities": opacities_d,
+            "colors": colors_d,
+        }
+        print("[Memory] CUDA allocation before tracking:")
+        total_mem = 0
+        for name, tensor in tensors.items():
+            size_mb = tensor.element_size() * tensor.nelement() / 1024**2
+            total_mem += size_mb
+            print(f"  • {name}: {size_mb:.2f} MB")
+        allocated = torch.cuda.memory_allocated(device) / 1024**2
+        print(f"  • CUDA allocated: {allocated:.2f} MB (tensor sum ≈ {total_mem:.2f} MB)")
+
     pbar = tqdm(view_data, desc="构建 mask→Gaussian 跟踪", total=num_frames)
     for frame_idx, view in enumerate(pbar):
         width, height = view["width"], view["height"]
@@ -798,6 +815,11 @@ def build_mask_gaussian_tracker(
         frame_gaussian_ids.append(frame_gauss_set)
         if len(frame_gauss_set) > 0:
             gaussian_in_frame_matrix[list(frame_gauss_set), frame_idx] = True
+
+    del quats_d, scales_d, opacities_d, colors_d
+    if means_d.is_cuda:
+        del means_d
+        torch.cuda.empty_cache()
 
     return {
         "gaussian_in_frame_matrix": gaussian_in_frame_matrix,
