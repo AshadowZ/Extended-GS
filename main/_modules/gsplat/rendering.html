@@ -373,6 +373,9 @@
     <span class="c1"># rolling shutter</span>
     <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
+    <span class="n">track_pixel_gaussians</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">max_gaussians_per_pixel</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
+    <span class="n">pixel_gaussian_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).</span>
 
@@ -414,6 +417,12 @@
 <span class="sd">        the colored image and the depth, in which the depth is the last channel of the output.</span>
 <span class="sd">        &quot;RGB+ED+N&quot; renders color, expected depth, and normals, where the output channels are</span>
 <span class="sd">        [RGB, depth, normal_x, normal_y, normal_z].</span>
+
+<span class="sd">    .. note::</span>
+<span class="sd">        **Pixel-to-Gaussian Tracking**: Setting ``track_pixel_gaussians=True`` records</span>
+<span class="sd">        `(gaussian_id, pixel_id)` pairs whose contributions exceed `pixel_gaussian_threshold`.</span>
+<span class="sd">        The mapping is exposed via ``meta[&quot;pixel_gaussians&quot;]`` for downstream tasks like</span>
+<span class="sd">        semantic clustering. Tracking is disabled by default to avoid extra memory and compute.</span>
 
 <span class="sd">    .. note::</span>
 <span class="sd">        **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between</span>
@@ -1017,7 +1026,13 @@
     <span class="p">)</span>
 
     <span class="c1"># print(&quot;rank&quot;, world_rank, &quot;Before rasterize_to_pixels&quot;)</span>
+    <span class="k">if</span> <span class="n">track_pixel_gaussians</span> <span class="ow">and</span> <span class="n">with_eval3d</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;track_pixel_gaussians is not supported when with_eval3d=True.&quot;</span>
+        <span class="p">)</span>
+
     <span class="n">render_median</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">tracked_pixel_gaussians</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">channel_chunk</span><span class="p">:</span>
         <span class="c1"># slice into chunks</span>
         <span class="n">n_chunks</span> <span class="o">=</span> <span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">channel_chunk</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">channel_chunk</span>
@@ -1054,7 +1069,13 @@
                     <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
                 <span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
-                <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span><span class="p">,</span> <span class="n">render_median_</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
+                <span class="n">track_chunk</span> <span class="o">=</span> <span class="n">track_pixel_gaussians</span> <span class="ow">and</span> <span class="n">tracked_pixel_gaussians</span> <span class="ow">is</span> <span class="kc">None</span>
+                <span class="p">(</span>
+                    <span class="n">render_colors_</span><span class="p">,</span>
+                    <span class="n">render_alphas_</span><span class="p">,</span>
+                    <span class="n">render_median_</span><span class="p">,</span>
+                    <span class="n">pixel_gaussians_chunk</span><span class="p">,</span>
+                <span class="p">)</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
                     <span class="n">means2d</span><span class="p">,</span>
                     <span class="n">conics</span><span class="p">,</span>
                     <span class="n">colors_chunk</span><span class="p">,</span>
@@ -1067,7 +1088,12 @@
                     <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds_chunk</span><span class="p">,</span>
                     <span class="n">packed</span><span class="o">=</span><span class="n">packed</span><span class="p">,</span>
                     <span class="n">absgrad</span><span class="o">=</span><span class="n">absgrad</span><span class="p">,</span>
+                    <span class="n">track_pixel_gaussians</span><span class="o">=</span><span class="n">track_chunk</span><span class="p">,</span>
+                    <span class="n">max_gaussians_per_pixel</span><span class="o">=</span><span class="n">max_gaussians_per_pixel</span><span class="p">,</span>
+                    <span class="n">pixel_gaussian_threshold</span><span class="o">=</span><span class="n">pixel_gaussian_threshold</span><span class="p">,</span>
                 <span class="p">)</span>
+                <span class="k">if</span> <span class="n">track_chunk</span><span class="p">:</span>
+                    <span class="n">tracked_pixel_gaussians</span> <span class="o">=</span> <span class="n">pixel_gaussians_chunk</span>
             <span class="n">render_colors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_colors_</span><span class="p">)</span>
             <span class="n">render_alphas</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_alphas_</span><span class="p">)</span>
             <span class="n">render_medians</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_median_</span><span class="p">)</span>
@@ -1099,7 +1125,12 @@
                 <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">render_median</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
+            <span class="p">(</span>
+                <span class="n">render_colors</span><span class="p">,</span>
+                <span class="n">render_alphas</span><span class="p">,</span>
+                <span class="n">render_median</span><span class="p">,</span>
+                <span class="n">pixel_gaussians_full</span><span class="p">,</span>
+            <span class="p">)</span> <span class="o">=</span> <span class="n">rasterize_to_pixels</span><span class="p">(</span>
                 <span class="n">means2d</span><span class="p">,</span>
                 <span class="n">conics</span><span class="p">,</span>
                 <span class="n">colors</span><span class="p">,</span>
@@ -1112,7 +1143,12 @@
                 <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds</span><span class="p">,</span>
                 <span class="n">packed</span><span class="o">=</span><span class="n">packed</span><span class="p">,</span>
                 <span class="n">absgrad</span><span class="o">=</span><span class="n">absgrad</span><span class="p">,</span>
+                <span class="n">track_pixel_gaussians</span><span class="o">=</span><span class="n">track_pixel_gaussians</span><span class="p">,</span>
+                <span class="n">max_gaussians_per_pixel</span><span class="o">=</span><span class="n">max_gaussians_per_pixel</span><span class="p">,</span>
+                <span class="n">pixel_gaussian_threshold</span><span class="o">=</span><span class="n">pixel_gaussian_threshold</span><span class="p">,</span>
             <span class="p">)</span>
+            <span class="k">if</span> <span class="n">track_pixel_gaussians</span><span class="p">:</span>
+                <span class="n">tracked_pixel_gaussians</span> <span class="o">=</span> <span class="n">pixel_gaussians_full</span>
     <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED+N&quot;</span><span class="p">]:</span>
         <span class="c1"># normalize the accumulated depth to get the expected depth</span>
         <span class="k">if</span> <span class="n">render_mode</span> <span class="o">==</span> <span class="s2">&quot;RGB+ED+N&quot;</span><span class="p">:</span>
@@ -1128,6 +1164,12 @@
             <span class="p">)</span>
 
     <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;render_median&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">render_median</span>
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="n">track_pixel_gaussians</span>
+        <span class="ow">and</span> <span class="n">tracked_pixel_gaussians</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="ow">and</span> <span class="n">tracked_pixel_gaussians</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span>
+    <span class="p">):</span>
+        <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;pixel_gaussians&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">tracked_pixel_gaussians</span>
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">meta</span></div>
 
 
