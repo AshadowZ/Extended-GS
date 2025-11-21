@@ -3,7 +3,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import open3d as o3d
 import imageio.v2 as imageio
@@ -13,6 +13,8 @@ import torch.nn.functional as F
 import networkx as nx
 from tqdm import tqdm
 from scipy.sparse import csr_matrix, vstack
+from scipy.spatial import cKDTree
+from scipy.stats import mode
 
 try:
     from cuml.cluster import DBSCAN as cuDBSCAN
@@ -568,8 +570,11 @@ def export_color_cluster(
     point_positions: torch.Tensor,
     save_dir: Path,
     filename: str = "color_cluster.ply",
+    assign_unlabeled_knn: bool = True,
+    knn_k: int = 1,
+    knn_filename: str = "color_cluster_knn.ply",
 ):
-    """导出彩色实例点云：实例随机分配颜色，点位置为高斯中心。"""
+    """导出彩色实例点云，可选地通过 KNN 为未分类点赋予实例颜色。"""
     os.makedirs(save_dir, exist_ok=True)
     total_point_ids_list = tracker.get("total_point_ids_list", [])
     if len(total_point_ids_list) == 0:
@@ -577,18 +582,64 @@ def export_color_cluster(
         return
 
     xyz = point_positions.cpu().numpy()
-    colors = np.zeros((xyz.shape[0], 3), dtype=np.float32)
+    num_points = xyz.shape[0]
+    colors = np.zeros((num_points, 3), dtype=np.float32)
+    inst_labels = np.full(num_points, -1, dtype=np.int32)
     rng = np.random.default_rng(0)
     inst_colors = rng.random((len(total_point_ids_list), 3)) * 0.7 + 0.3
 
     for idx, point_ids in enumerate(total_point_ids_list):
-        colors[np.array(point_ids, dtype=int)] = inst_colors[idx]
+        pts = np.array(point_ids, dtype=int)
+        colors[pts] = inst_colors[idx]
+        inst_labels[pts] = idx
 
     pcld = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(xyz))
     pcld.colors = o3d.utility.Vector3dVector(colors)
     save_path = save_dir / filename
     o3d.io.write_point_cloud(str(save_path), pcld)
     print(f"[Export] 已保存彩色实例点云到 {save_path}")
+
+    if not assign_unlabeled_knn:
+        return
+
+    unlabeled_mask = inst_labels < 0
+    assigned_mask = ~unlabeled_mask
+    if not np.any(unlabeled_mask):
+        print("[Export] 所有点已有实例颜色，跳过 KNN 重新着色。")
+        return
+    if not np.any(assigned_mask):
+        print("[Export] 未找到可供 KNN 参考的实例点，跳过。")
+        return
+
+    k = max(1, min(knn_k, int(np.sum(assigned_mask))))
+    assigned_xyz = xyz[assigned_mask]
+    assigned_labels = inst_labels[assigned_mask]
+    tree = cKDTree(assigned_xyz)
+    _, nn_idx = tree.query(xyz[unlabeled_mask], k=k)
+    if k == 1:
+        inferred_labels = assigned_labels[nn_idx]
+    else:
+        neighbor_labels = assigned_labels[nn_idx]
+        if neighbor_labels.ndim == 1:
+            neighbor_labels = neighbor_labels[None, :]
+        mode_result = mode(neighbor_labels, axis=1, keepdims=False)
+        inferred_labels = (
+            np.asarray(mode_result.mode)
+            if hasattr(mode_result, "mode")
+            else np.asarray(mode_result)
+        )
+        if inferred_labels.ndim > 1:
+            inferred_labels = inferred_labels.squeeze(-1)
+        inferred_labels = inferred_labels.astype(np.int32, copy=False)
+    inst_labels[unlabeled_mask] = inferred_labels
+
+    colors_knn = colors.copy()
+    colors_knn[unlabeled_mask] = inst_colors[inst_labels[unlabeled_mask]]
+    pcld_knn = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(xyz))
+    pcld_knn.colors = o3d.utility.Vector3dVector(colors_knn)
+    knn_path = save_dir / knn_filename
+    o3d.io.write_point_cloud(str(knn_path), pcld_knn)
+    print(f"[Export] 已保存 KNN 填充彩色点云到 {knn_path}")
 
 
 def parse_args() -> argparse.Namespace:
