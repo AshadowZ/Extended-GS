@@ -127,3 +127,7 @@ results
 !examples/benchmarks/compression/results/
 
 output/*
+
+submodules/CropFormer/ckpts/*
+submodules/CropFormer/detectron2
+
