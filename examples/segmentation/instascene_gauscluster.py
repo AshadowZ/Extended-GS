@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 import networkx as nx
 from tqdm import tqdm
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, vstack
 
 try:
     from cuml.cluster import DBSCAN as cuDBSCAN
@@ -39,8 +39,8 @@ class Node:
     def __init__(
         self,
         mask_list,
-        visible_frame: torch.Tensor,
-        contained_mask: torch.Tensor,
+        visible_frame,
+        contained_mask,
         point_ids: set,
         node_info,
         son_node_info=None,
@@ -55,21 +55,37 @@ class Node:
     @staticmethod
     def create_node_from_list(node_list, node_info):
         mask_list = []
-        visible_frame = torch.zeros(len(node_list[0].visible_frame), dtype=bool, device=node_list[0].visible_frame.device)
-        contained_mask = torch.zeros(len(node_list[0].contained_mask), dtype=bool, device=node_list[0].contained_mask.device)
         point_ids = set()
         son_node_info = set()
+        visible_stack = []
+        contained_stack = []
         for node in node_list:
             mask_list += node.mask_list
-            visible_frame = visible_frame | node.visible_frame.bool()
-            contained_mask = contained_mask | node.contained_mask.bool()
             point_ids = point_ids.union(node.point_ids)
             son_node_info.add(node.node_info)
-        return Node(mask_list, visible_frame.float(), contained_mask.float(), point_ids, node_info, son_node_info)
+            visible_stack.append(node.visible_frame)
+            contained_stack.append(node.contained_mask)
+
+        if len(visible_stack) == 1:
+            visible_frame = visible_stack[0].copy()
+        else:
+            visible_frame = vstack(visible_stack).sum(axis=0)
+            visible_frame[visible_frame > 1] = 1
+            visible_frame = csr_matrix(visible_frame)
+
+        if len(contained_stack) == 1:
+            contained_mask = contained_stack[0].copy()
+        else:
+            contained_mask = vstack(contained_stack).sum(axis=0)
+            contained_mask[contained_mask > 1] = 1
+            contained_mask = csr_matrix(contained_mask)
+
+        return Node(mask_list, visible_frame, contained_mask, point_ids, node_info, son_node_info)
 
 
 def compute_mask_visible_frame(global_gaussian_in_mask_matrix, gaussian_in_frame_matrix, threshold=0.0):
     """Use sparse matrix multiplication to determine mask visibility per frame."""
+    print("[Mask Visibility] 使用稀疏矩阵计算 mask 可见帧 ...")
     A = global_gaussian_in_mask_matrix.astype(np.float32)
     if not isinstance(A, csr_matrix):
         A = csr_matrix(A, dtype=np.float32)
@@ -91,6 +107,7 @@ def compute_mask_visible_frame(global_gaussian_in_mask_matrix, gaussian_in_frame
         ),
         shape=(A.shape[1], B.shape[1]),
     )
+    print("[Mask Visibility] 计算完成。")
     return result.toarray()
 
 
@@ -151,10 +168,10 @@ def judge_single_mask(
         return True, contained_mask, visible_frame
 
 
-def get_observer_num_thresholds(visible_frames: torch.Tensor):
-    observer_num_matrix = torch.matmul(visible_frames, visible_frames.transpose(0, 1))
-    observer_num_list = observer_num_matrix.flatten()
-    observer_num_list = observer_num_list[observer_num_list > 0].cpu().numpy()
+def get_observer_num_thresholds(visible_frames_sparse: csr_matrix):
+    observer_num_matrix = visible_frames_sparse @ visible_frames_sparse.T
+    observer_num_list = observer_num_matrix.data
+    observer_num_list = observer_num_list[observer_num_list > 0]
     observer_num_thresholds = []
     for percentile in range(95, -5, -5):
         observer_num = np.percentile(observer_num_list, percentile)
@@ -168,16 +185,18 @@ def get_observer_num_thresholds(visible_frames: torch.Tensor):
 
 
 def update_graph(nodes, observer_num_threshold, connect_threshold):
-    node_visible_frames = torch.stack([node.visible_frame for node in nodes], dim=0)
-    node_contained_masks = torch.stack([node.contained_mask for node in nodes], dim=0)
-    observer_nums = torch.matmul(node_visible_frames, node_visible_frames.transpose(0, 1))
-    supporter_nums = torch.matmul(node_contained_masks, node_contained_masks.transpose(0, 1))
-    view_concensus_rate = supporter_nums / (observer_nums + 1e-7)
-    disconnect = torch.eye(len(nodes), dtype=bool, device=node_visible_frames.device)
-    disconnect = disconnect | (observer_nums < observer_num_threshold)
+    node_visible_frames = vstack([node.visible_frame for node in nodes])
+    node_contained_masks = vstack([node.contained_mask for node in nodes])
+    observer_nums = node_visible_frames @ node_visible_frames.T
+    supporter_nums = node_contained_masks @ node_contained_masks.T
+    observer_nums_dense = observer_nums.toarray()
+    supporter_nums_dense = supporter_nums.toarray()
+    view_concensus_rate = supporter_nums_dense / (observer_nums_dense + 1e-7)
+    num_nodes = len(nodes)
+    disconnect = np.eye(num_nodes, dtype=bool)
+    disconnect = disconnect | (observer_nums_dense < observer_num_threshold)
     A = view_concensus_rate >= connect_threshold
     A = A & ~disconnect
-    A = A.cpu().numpy()
     G = nx.from_numpy_array(A)
     return G
 
@@ -195,7 +214,6 @@ def iterative_clustering(nodes, observer_num_thresholds, connect_threshold):
     for iterate_id, observer_num_threshold in iterator:
         graph = update_graph(nodes, observer_num_threshold, connect_threshold)
         nodes = cluster_into_new_nodes(iterate_id + 1, nodes, graph)
-        torch.cuda.empty_cache()
     return nodes
 
 
@@ -265,18 +283,18 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
         contained_masks[:, global_mask_id] = False
         visible_frames[mask_projected_idx, frame_id] = False
 
-    contained_masks_t = torch.from_numpy(contained_masks).float().cuda()
-    visible_frames_t = torch.from_numpy(visible_frames).float().cuda()
+    contained_masks_sparse = csr_matrix(contained_masks, dtype=np.float32)
+    visible_frames_sparse = csr_matrix(visible_frames, dtype=np.float32)
 
-    observer_num_thresholds = get_observer_num_thresholds(visible_frames_t)
+    observer_num_thresholds = get_observer_num_thresholds(visible_frames_sparse)
 
     nodes = []
     for global_mask_id, (frame_id, mask_id) in enumerate(global_frame_mask_list):
         if global_mask_id in undersegment_mask_ids:
             continue
         mask_list = [(frame_id, mask_id)]
-        frame = visible_frames_t[global_mask_id]
-        frame_mask = contained_masks_t[global_mask_id]
+        frame = visible_frames_sparse.getrow(global_mask_id).copy()
+        frame_mask = contained_masks_sparse.getrow(global_mask_id).copy()
         point_ids = set(mask_gaussian_pclds[f"{frame_id}_{mask_id}"])
         node_info = (0, len(nodes))
         node = Node(mask_list, frame, frame_mask, point_ids, node_info, None)
@@ -378,7 +396,7 @@ def filter_point(
     mask_point_clouds: Dict,
     point_filter_threshold: float,
 ):
-    node_global_frame_id_list = np.where(node.visible_frame.cpu().numpy())[0]
+    node_global_frame_id_list = np.where(node.visible_frame.toarray().ravel() > 0)[0]
     mask_list = node.mask_list
 
     point_appear_in_video_nums = []
