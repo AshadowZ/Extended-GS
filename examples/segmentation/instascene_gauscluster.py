@@ -694,8 +694,6 @@ def collect_view_data(
                     f"Mask 尺寸 {mask_h}x{mask_w} 与相机解析到的尺寸 {height}x{width} "
                     f"以及原始图像尺寸 {actual_h}x{actual_w} 均不一致：{mask_path}"
                 )
-        segmap = torch.from_numpy(mask_np.copy()).long()
-
         view_data.append(
             {
                 "index": int(parser_idx),
@@ -705,7 +703,6 @@ def collect_view_data(
                 "height": int(height),
                 "K": torch.from_numpy(K).float(),
                 "camtoworld": torch.from_numpy(camtoworld).float(),
-                "segmap": segmap,
                 "mask_path": mask_path,
             }
         )
@@ -776,7 +773,9 @@ def build_mask_gaussian_tracker(
         gaus_ids = pixel_gaussians[:, 0].long()
         pixel_ids = pixel_gaussians[:, 1].long()
 
-        segmap_flat = view["segmap"].to(device).view(-1)
+        segmap_np = read_mask(view["mask_path"])
+        segmap = torch.from_numpy(segmap_np).long().to(device)
+        segmap_flat = segmap.view(-1)
         labels = segmap_flat[pixel_ids]
         valid_mask = labels > 0
         if valid_mask.sum() == 0:
