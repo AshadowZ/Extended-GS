@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -41,7 +42,7 @@ class Node:
         mask_list,
         visible_frame,
         contained_mask,
-        point_ids: set,
+        point_ids: np.ndarray,
         node_info,
         son_node_info=None,
     ):
@@ -55,16 +56,23 @@ class Node:
     @staticmethod
     def create_node_from_list(node_list, node_info):
         mask_list = []
-        point_ids = set()
+        point_ids_list = []
         son_node_info = set()
         visible_stack = []
         contained_stack = []
         for node in node_list:
             mask_list += node.mask_list
-            point_ids = point_ids.union(node.point_ids)
+            point_ids_list.append(node.point_ids)
             son_node_info.add(node.node_info)
             visible_stack.append(node.visible_frame)
             contained_stack.append(node.contained_mask)
+
+        if len(point_ids_list) == 1:
+            point_ids = point_ids_list[0].copy()
+        else:
+            point_ids = point_ids_list[0]
+            for arr in point_ids_list[1:]:
+                point_ids = np.union1d(point_ids, arr)
 
         if len(visible_stack) == 1:
             visible_frame = visible_stack[0].copy()
@@ -172,14 +180,17 @@ def get_observer_num_thresholds(visible_frames_sparse: csr_matrix):
     observer_num_matrix = visible_frames_sparse @ visible_frames_sparse.T
     observer_num_list = observer_num_matrix.data
     observer_num_list = observer_num_list[observer_num_list > 0]
-    observer_num_thresholds = []
-    for percentile in range(95, -5, -5):
-        observer_num = np.percentile(observer_num_list, percentile)
+    if observer_num_list.size == 0:
+        return [1]
+
+    percentiles = np.arange(95, -5, -5)
+    percentile_values = np.percentile(observer_num_list, percentiles)
+    observer_num_thresholds: List[float] = []
+    for percentile, observer_num in zip(percentiles, percentile_values):
         if observer_num <= 1:
             if percentile < 50:
                 break
-            else:
-                observer_num = 1
+            observer_num = 1
         observer_num_thresholds.append(observer_num)
     return observer_num_thresholds
 
@@ -283,22 +294,30 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
         contained_masks[:, global_mask_id] = False
         visible_frames[mask_projected_idx, frame_id] = False
 
-    contained_masks_sparse = csr_matrix(contained_masks, dtype=np.float32)
-    visible_frames_sparse = csr_matrix(visible_frames, dtype=np.float32)
+    contained_masks_sparse = csr_matrix(contained_masks, dtype=np.int32)
+    visible_frames_sparse = csr_matrix(visible_frames, dtype=np.int32)
+    contained_masks_sparse.sort_indices()
+    visible_frames_sparse.sort_indices()
 
+    print("[Perf] 开始计算共现矩阵与观察者阈值 ...")
+    threshold_t0 = time.perf_counter()
     observer_num_thresholds = get_observer_num_thresholds(visible_frames_sparse)
+    print(f"[Perf] 共现矩阵/阈值耗时 {time.perf_counter() - threshold_t0:.2f}s")
 
+    print("[Perf] 开始构建节点列表 ...")
+    node_t0 = time.perf_counter()
     nodes = []
     for global_mask_id, (frame_id, mask_id) in enumerate(global_frame_mask_list):
         if global_mask_id in undersegment_mask_ids:
             continue
         mask_list = [(frame_id, mask_id)]
-        frame = visible_frames_sparse.getrow(global_mask_id).copy()
-        frame_mask = contained_masks_sparse.getrow(global_mask_id).copy()
-        point_ids = set(mask_gaussian_pclds[f"{frame_id}_{mask_id}"])
+        frame = visible_frames_sparse.getrow(global_mask_id)
+        frame_mask = contained_masks_sparse.getrow(global_mask_id)
+        point_ids = np.unique(np.asarray(mask_gaussian_pclds[f"{frame_id}_{mask_id}"], dtype=np.int64))
         node_info = (0, len(nodes))
         node = Node(mask_list, frame, frame_mask, point_ids, node_info, None)
         nodes.append(node)
+    print(f"[Perf] 构建节点耗时 {time.perf_counter() - node_t0:.2f}s，节点数 {len(nodes)}")
 
     nodes = iterative_clustering(nodes, observer_num_thresholds, connect_threshold=0.9)
 
@@ -455,17 +474,18 @@ def post_process_clusters(
     for node in iterator:
         if len(node.mask_list) < 2:
             continue
-        pcld = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(scene_points[list(node.point_ids)]))
+        node_point_ids = node.point_ids.tolist()
+        pcld = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(scene_points[node_point_ids]))
         if True:
             pcld_list, point_ids_list = dbscan_process(
                 pcld,
-                list(node.point_ids),
+                node_point_ids,
                 eps=dbscan_eps,
                 min_points=dbscan_min_points,
                 use_gpu=use_gpu_dbscan,
             )
         else:
-            pcld_list, point_ids_list = [pcld], [np.array(list(node.point_ids))]
+            pcld_list, point_ids_list = [pcld], [np.array(node_point_ids)]
         point_ids_list, bbox_list, mask_list = filter_point(
             gaussian_in_frame_matrix,
             node,
