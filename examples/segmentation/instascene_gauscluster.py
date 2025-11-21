@@ -598,6 +598,9 @@ def export_color_cluster(
     save_path = save_dir / filename
     o3d.io.write_point_cloud(str(save_path), pcld)
     print(f"[Export] 已保存彩色实例点云到 {save_path}")
+    label_path = save_dir / "instance_labels.npy"
+    np.save(label_path, inst_labels.copy())
+    print(f"[Export] 已保存实例标签到 {label_path}")
 
     if not assign_unlabeled_knn:
         return
@@ -640,6 +643,9 @@ def export_color_cluster(
     knn_path = save_dir / knn_filename
     o3d.io.write_point_cloud(str(knn_path), pcld_knn)
     print(f"[Export] 已保存 KNN 填充彩色点云到 {knn_path}")
+    knn_label_path = save_dir / "instance_labels_knn.npy"
+    np.save(knn_label_path, inst_labels.copy())
+    print(f"[Export] 已保存 KNN 标签到 {knn_label_path}")
 
 
 def parse_args() -> argparse.Namespace:

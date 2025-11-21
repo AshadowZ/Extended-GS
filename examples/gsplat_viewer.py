@@ -24,6 +24,7 @@ class GsplatRenderTabState(RenderTabState):
         "alpha",
         "render_normal",
         "surf_normal",
+        "instance",
     ] = "rgb"
     normalize_nearfar: bool = False
     inverse: bool = False
@@ -45,7 +46,9 @@ class GsplatViewer(Viewer):
         render_fn: Callable,
         output_dir: Path,
         mode: Literal["rendering", "training"] = "rendering",
+        enable_instance_mode: bool = False,
     ):
+        self._enable_instance_mode = enable_instance_mode
         super().__init__(server, render_fn, output_dir, mode)
         server.gui.set_panel_label("gsplat viewer")
 
@@ -146,13 +149,9 @@ class GsplatViewer(Viewer):
 
                 render_mode_dropdown = server.gui.add_dropdown(
                     "Render Mode",
-                    (
-                        "rgb",
-                        "expected_depth",
-                        "median_depth",
-                        "alpha",
-                        "render_normal",
-                        "surf_normal",
+                    tuple(
+                        ["rgb", "expected_depth", "median_depth", "alpha", "render_normal", "surf_normal"]
+                        + (["instance"] if self._enable_instance_mode else [])
                     ),
                     initial_value=self.render_tab_state.render_mode,
                     hint="Render mode to use.",
