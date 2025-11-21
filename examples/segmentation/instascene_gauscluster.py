@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 import networkx as nx
 from tqdm import tqdm
+from scipy.sparse import csr_matrix
 
 try:
     from cuml.cluster import DBSCAN as cuDBSCAN
@@ -67,23 +68,30 @@ class Node:
         return Node(mask_list, visible_frame.float(), contained_mask.float(), point_ids, node_info, son_node_info)
 
 
-def compute_mask_visible_frame(mask_gaussian_pclds, global_frame_mask_list, gaussian_in_frame_matrix, threshold=0.0):
-    """Estimate which frames each mask is visible in without materializing dense matrices."""
-    num_masks = len(global_frame_mask_list)
-    num_frames = gaussian_in_frame_matrix.shape[1]
-    visible_mask = np.zeros((num_masks, num_frames), dtype=bool)
-    iterator = tqdm(
-        enumerate(global_frame_mask_list),
-        total=num_masks,
-        desc="计算 mask 可见帧",
+def compute_mask_visible_frame(global_gaussian_in_mask_matrix, gaussian_in_frame_matrix, threshold=0.0):
+    """Use sparse matrix multiplication to determine mask visibility per frame."""
+    A = global_gaussian_in_mask_matrix.astype(np.float32)
+    if not isinstance(A, csr_matrix):
+        A = csr_matrix(A, dtype=np.float32)
+    B = csr_matrix(gaussian_in_frame_matrix, dtype=np.float32)
+
+    intersection_counts = A.T @ B  # [N_masks, N_frames]
+    mask_point_counts = np.array(A.sum(axis=0)).ravel() + 1e-6
+
+    intersection_counts = intersection_counts.tocoo()
+    visibility = (intersection_counts.data / mask_point_counts[intersection_counts.row]) > threshold
+
+    result = csr_matrix(
+        (
+            np.ones(np.count_nonzero(visibility), dtype=bool),
+            (
+                intersection_counts.row[visibility],
+                intersection_counts.col[visibility],
+            ),
+        ),
+        shape=(A.shape[1], B.shape[1]),
     )
-    for mask_idx, (frame_id, mask_id) in iterator:
-        ids = mask_gaussian_pclds.get(f"{frame_id}_{mask_id}")
-        if ids is None or len(ids) == 0:
-            continue
-        frame_hits = gaussian_in_frame_matrix[np.asarray(ids, dtype=np.int64), :].sum(axis=0)
-        visible_mask[mask_idx] = (frame_hits / (len(ids) + 1e-6)) > threshold
-    return visible_mask
+    return result.toarray()
 
 
 def judge_single_mask(
@@ -201,12 +209,33 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     num_points = gaussian_in_frame_matrix.shape[0]
     gaussian_in_frame_maskid_matrix = np.zeros((num_points, gaussian_in_frame_matrix.shape[1]), dtype=np.uint16)
 
+    mask_rows: List[np.ndarray] = []
+    mask_cols: List[np.ndarray] = []
+
     for mask_idx, (frame_id, mask_id) in enumerate(global_frame_mask_list):
         ids = mask_gaussian_pclds[f"{frame_id}_{mask_id}"]
         gaussian_in_frame_maskid_matrix[ids, frame_id] = mask_id
+        if len(ids) == 0:
+            continue
+        ids_arr = np.asarray(ids, dtype=np.int64)
+        mask_rows.append(ids_arr)
+        mask_cols.append(np.full(ids_arr.shape[0], mask_idx, dtype=np.int64))
+
+    if len(mask_rows) > 0:
+        mask_row_idx = np.concatenate(mask_rows)
+        mask_col_idx = np.concatenate(mask_cols)
+    else:
+        mask_row_idx = np.empty(0, dtype=np.int64)
+        mask_col_idx = np.empty(0, dtype=np.int64)
+
+    data = np.ones(mask_row_idx.shape[0], dtype=bool)
+    global_gaussian_in_mask_matrix = csr_matrix(
+        (data, (mask_row_idx, mask_col_idx)),
+        shape=(num_points, len(global_frame_mask_list)),
+    )
 
     mask_visible_frames = compute_mask_visible_frame(
-        mask_gaussian_pclds, global_frame_mask_list, gaussian_in_frame_matrix
+        global_gaussian_in_mask_matrix, gaussian_in_frame_matrix
     )
 
     contained_masks = []
@@ -736,23 +765,6 @@ def build_mask_gaussian_tracker(
     scales_d = scales.to(device)
     opacities_d = opacities.to(device)
     colors_d = colors.to(device)
-
-    if device.type == "cuda":
-        tensors = {
-            "means": means_d,
-            "quats": quats_d,
-            "scales": scales_d,
-            "opacities": opacities_d,
-            "colors": colors_d,
-        }
-        print("[Memory] CUDA allocation before tracking:")
-        total_mem = 0
-        for name, tensor in tensors.items():
-            size_mb = tensor.element_size() * tensor.nelement() / 1024**2
-            total_mem += size_mb
-            print(f"  • {name}: {size_mb:.2f} MB")
-        allocated = torch.cuda.memory_allocated(device) / 1024**2
-        print(f"  • CUDA allocated: {allocated:.2f} MB (tensor sum ≈ {total_mem:.2f} MB)")
 
     pbar = tqdm(view_data, desc="构建 mask→Gaussian 跟踪", total=num_frames)
     for frame_idx, view in enumerate(pbar):
