@@ -38,7 +38,12 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     scalar_t *__restrict__ render_alphas, // [I, image_height, image_width, 1]
     scalar_t *__restrict__ render_median, // [I, image_height, image_width, 1]
     int32_t *__restrict__ last_ids,       // [I, image_height, image_width]
-    int32_t *__restrict__ median_ids      // [I, image_height, image_width]
+    int32_t *__restrict__ median_ids,     // [I, image_height, image_width]
+    const bool track_pixel_gaussians,
+    const float pixel_gaussian_threshold,
+    const int64_t max_pixel_gaussians,
+    int32_t *__restrict__ pixel_gaussians,
+    int32_t *__restrict__ pixel_gaussian_counter
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -66,6 +71,11 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     float px = (float)j + 0.5f;
     float py = (float)i + 0.5f;
     int32_t pix_id = i * image_width + j;
+    const int64_t pixels_per_image =
+        static_cast<int64_t>(image_height) * static_cast<int64_t>(image_width);
+    const int64_t global_pixel_offset =
+        static_cast<int64_t>(image_id) * pixels_per_image;
+    const int64_t global_pixel_id = global_pixel_offset + pix_id;
 
     // return if out of bounds
     // keep not rasterizing threads around for reading data
@@ -174,6 +184,20 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             }
             cur_idx = batch_start + t;
 
+            if (
+                track_pixel_gaussians && pixel_gaussians != nullptr
+                && pixel_gaussian_counter != nullptr
+                && vis > pixel_gaussian_threshold
+            ) {
+                int32_t write_idx = atomicAdd(pixel_gaussian_counter, 1);
+                if (write_idx < max_pixel_gaussians) {
+                    int64_t offset = static_cast<int64_t>(write_idx) * 2;
+                    pixel_gaussians[offset] = g;
+                    pixel_gaussians[offset + 1] =
+                        static_cast<int32_t>(global_pixel_id);
+                }
+            }
+
             if (T > 0.5f) {
                 median_depth = c_ptr[CDIM - 1];
                 median_idx = static_cast<int32_t>(batch_start + t);
@@ -220,11 +244,16 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    at::Tensor renders,      // [..., image_height, image_width, channels]
-    at::Tensor alphas,       // [..., image_height, image_width]
+    at::Tensor renders,       // [..., image_height, image_width, channels]
+    at::Tensor alphas,        // [..., image_height, image_width]
     at::Tensor render_median, // [..., image_height, image_width, 1]
-    at::Tensor last_ids,     // [..., image_height, image_width]
-    at::Tensor median_ids    // [..., image_height, image_width]
+    at::Tensor last_ids,      // [..., image_height, image_width]
+    at::Tensor median_ids,    // [..., image_height, image_width]
+    const bool track_pixel_gaussians,
+    const float pixel_gaussian_threshold,
+    const int64_t max_pixel_gaussians,
+    at::Tensor pixel_gaussians,
+    at::Tensor pixel_gaussian_counter
 ) {
     bool packed = means2d.dim() == 2;
 
@@ -281,7 +310,16 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
             alphas.data_ptr<float>(),
             render_median.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            median_ids.data_ptr<int32_t>()
+            median_ids.data_ptr<int32_t>(),
+            track_pixel_gaussians,
+            static_cast<float>(pixel_gaussian_threshold),
+            max_pixel_gaussians,
+            track_pixel_gaussians
+                ? pixel_gaussians.data_ptr<int32_t>()
+                : nullptr,
+            track_pixel_gaussians
+                ? pixel_gaussian_counter.data_ptr<int32_t>()
+                : nullptr
         );
 }
 
@@ -305,7 +343,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         at::Tensor alphas,                                                     \
         at::Tensor render_median,                                              \
         at::Tensor last_ids,                                                   \
-        at::Tensor median_ids                                                  \
+        at::Tensor median_ids,                                                 \
+        const bool track_pixel_gaussians,                                      \
+        const float pixel_gaussian_threshold,                                  \
+        const int64_t max_pixel_gaussians,                                     \
+        at::Tensor pixel_gaussians,                                            \
+        at::Tensor pixel_gaussian_counter                                      \
     );
 
 __INS__(1)

@@ -121,9 +121,41 @@ def main(local_rank: int, world_rank, world_size: int, args):
         sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
         print("Number of Gaussians:", len(means))
 
+    instance_colors_tensor = None
+    missing_instance_warning_logged = False
+    if args.instance_labels is not None:
+        labels_np = np.load(args.instance_labels).astype(np.int64)
+        if labels_np.shape[0] != means.shape[0]:
+            raise ValueError(
+                f"instance_labels length {labels_np.shape[0]} != number of Gaussians {means.shape[0]}"
+            )
+        valid_mask = labels_np >= 0
+        max_label = int(labels_np[valid_mask].max()) if valid_mask.any() else -1
+        num_instances = max_label + 1
+        rng = np.random.default_rng(args.instance_color_seed)
+        if num_instances > 0:
+            palette = rng.random((num_instances, 3)).astype(np.float32)
+        else:
+            palette = np.zeros((0, 3), dtype=np.float32)
+        default_color = np.array([[0.2, 0.2, 0.2]], dtype=np.float32)
+        palette_full = np.concatenate([palette, default_color], axis=0)
+        default_idx = palette_full.shape[0] - 1
+        labels_clamped = labels_np.copy()
+        labels_clamped[labels_clamped < 0] = default_idx
+        palette_tensor = torch.from_numpy(palette_full).float().to(device)
+        labels_tensor = torch.from_numpy(labels_clamped).long().to(device)
+        inst_colors = palette_tensor[labels_tensor] / 0.28209479177387814
+        instance_colors_tensor = inst_colors.unsqueeze(1).contiguous()
+        print(
+            f"[Instance] Loaded labels from {args.instance_labels} with {num_instances} instances."
+        )
+    elif args.instance_labels is None:
+        missing_instance_warning_logged = False
+
     # register and open viewer
     @torch.no_grad()
     def viewer_render_fn(camera_state: CameraState, render_tab_state: RenderTabState):
+        nonlocal missing_instance_warning_logged
         assert isinstance(render_tab_state, GsplatRenderTabState)
         if render_tab_state.preview_render:
             width = render_tab_state.render_width
@@ -139,6 +171,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
 
         RENDER_MODE_MAP = {
             "rgb": "RGB",
+            "instance": "RGB",
             "expected_depth": "ED",
             "median_depth": "ED",
             "alpha": "RGB",
@@ -146,21 +179,33 @@ def main(local_rank: int, world_rank, world_size: int, args):
             "surf_normal": "ED",
         }
 
+        colors_for_render = colors
+        sh_degree_render = (
+            min(render_tab_state.max_sh_degree, sh_degree)
+            if sh_degree is not None
+            else None
+        )
+        if render_tab_state.render_mode == "instance":
+            if instance_colors_tensor is not None:
+                colors_for_render = instance_colors_tensor
+                sh_degree_render = 0
+            elif not missing_instance_warning_logged:
+                print(
+                    "[Instance] instance_labels not provided; falling back to RGB colors."
+                )
+                missing_instance_warning_logged = True
+
         render_colors, render_alphas, info = rasterization(
             means,  # [N, 3]
             quats,  # [N, 4]
             scales,  # [N, 3]
             opacities,  # [N]
-            colors,  # [N, S, 3]
+            colors_for_render,  # [N, S, 3]
             viewmat[None],  # [1, 4, 4]
             K[None],  # [1, 3, 3]
             width,
             height,
-            sh_degree=(
-                min(render_tab_state.max_sh_degree, sh_degree)
-                if sh_degree is not None
-                else None
-            ),
+            sh_degree=sh_degree_render,
             near_plane=render_tab_state.near_plane,
             far_plane=render_tab_state.far_plane,
             radius_clip=render_tab_state.radius_clip,
@@ -178,7 +223,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
 
         render_median = info.get("render_median")
-        if render_tab_state.render_mode == "rgb":
+        if render_tab_state.render_mode in ("rgb", "instance"):
             # colors represented with sh are not guranteed to be in [0, 1]
             render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
             renders = render_colors.cpu().numpy()
@@ -236,6 +281,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         render_fn=viewer_render_fn,
         output_dir=Path(args.output_dir),
         mode="rendering",
+        enable_instance_mode=instance_colors_tensor is not None,
     )
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(100000)
@@ -270,6 +316,18 @@ if __name__ == "__main__":
         "--with_ut", action="store_true", help="use uncentered transform"
     )
     parser.add_argument("--with_eval3d", action="store_true", help="use eval 3D")
+    parser.add_argument(
+        "--instance_labels",
+        type=str,
+        default=None,
+        help="Optional path to per-Gaussian instance labels (.npy) for instance-colored rendering.",
+    )
+    parser.add_argument(
+        "--instance_color_seed",
+        type=int,
+        default=0,
+        help="Random seed used to generate consistent instance colors.",
+    )
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 

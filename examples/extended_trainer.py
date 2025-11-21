@@ -120,11 +120,11 @@ class Config:
     # Densification hyper-parameters (see notes below; shared unless marked otherwise)
     prune_opa: float = 0.05
     grow_grad2d: float = 0.0002
-    prune_scale3d: float = 0.1
+    prune_scale3d: float = 0.08
     prune_scale2d: float = 0.15
     refine_scale2d_stop_iter: int = 4000
     refine_start_iter: int = 500
-    refine_stop_iter: int = 20000
+    refine_stop_iter: int = 15000
     reset_every: int = 3000
     refine_every: int = 100
     absgrad: bool = True
@@ -1108,42 +1108,44 @@ class Runner:
                 else:
                     visibility_mask = (info["radii"] > 0).all(-1).any(0)
 
-            for optimizer in self.optimizers.values():
-                if cfg.visible_adam:
-                    optimizer.step(visibility_mask)
-                else:
-                    optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+            # for optimizer in self.optimizers.values():
+            #     if cfg.visible_adam:
+            #         optimizer.step(visibility_mask)
+            #     else:
+            #         optimizer.step()
+            #     optimizer.zero_grad(set_to_none=True)
+
             # optimize with gradient accumulation
             # Implementation of gradient accumulation trick from:
             # "Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering"
             # https://arxiv.org/abs/2508.12313v1
-            # if step <= 15000:
-            #     # Every step update for first 15000 iterations
-            #     for optimizer in self.optimizers.values():
-            #         if cfg.visible_adam:
-            #             optimizer.step(visibility_mask)
-            #         else:
-            #             optimizer.step()
-            #         optimizer.zero_grad(set_to_none=True)
-            # elif step <= 22500:
-            #     # Accumulate 5 steps, update every 5 steps for 15000-22500 iterations
-            #     if step % 5 == 0:
-            #         for optimizer in self.optimizers.values():
-            #             if cfg.visible_adam:
-            #                 optimizer.step(visibility_mask)
-            #             else:
-            #                 optimizer.step()
-            #             optimizer.zero_grad(set_to_none=True)
-            # else:
-            #     # Accumulate 20 steps, update every 20 steps after 22500 iterations
-            #     if step % 20 == 0:
-            #         for optimizer in self.optimizers.values():
-            #             if cfg.visible_adam:
-            #                 optimizer.step(visibility_mask)
-            #             else:
-            #                 optimizer.step()
-            #             optimizer.zero_grad(set_to_none=True)
+            if step <= 15000:
+                # Every step update for first 15000 iterations
+                for optimizer in self.optimizers.values():
+                    if cfg.visible_adam:
+                        optimizer.step(visibility_mask)
+                    else:
+                        optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+            elif step <= 22500:
+                # Accumulate 5 steps, update every 5 steps for 15000-22500 iterations
+                if step % 5 == 0:
+                    for optimizer in self.optimizers.values():
+                        if cfg.visible_adam:
+                            optimizer.step(visibility_mask)
+                        else:
+                            optimizer.step()
+                        optimizer.zero_grad(set_to_none=True)
+            else:
+                # Accumulate 20 steps, update every 20 steps after 22500 iterations
+                if step % 20 == 0:
+                    for optimizer in self.optimizers.values():
+                        if cfg.visible_adam:
+                            optimizer.step(visibility_mask)
+                        else:
+                            optimizer.step()
+                        optimizer.zero_grad(set_to_none=True)
+
             for optimizer in self.pose_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)

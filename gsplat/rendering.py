@@ -68,6 +68,9 @@ def rasterization(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    track_pixel_gaussians: bool = False,
+    max_gaussians_per_pixel: int = 100,
+    pixel_gaussian_threshold: float = 0.1,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -109,6 +112,12 @@ def rasterization(
         the colored image and the depth, in which the depth is the last channel of the output.
         "RGB+ED+N" renders color, expected depth, and normals, where the output channels are
         [RGB, depth, normal_x, normal_y, normal_z].
+
+    .. note::
+        **Pixel-to-Gaussian Tracking**: Setting ``track_pixel_gaussians=True`` records
+        `(gaussian_id, pixel_id)` pairs whose contributions exceed `pixel_gaussian_threshold`.
+        The mapping is exposed via ``meta["pixel_gaussians"]`` for downstream tasks like
+        semantic clustering. Tracking is disabled by default to avoid extra memory and compute.
 
     .. note::
         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
@@ -712,7 +721,13 @@ def rasterization(
     )
 
     # print("rank", world_rank, "Before rasterize_to_pixels")
+    if track_pixel_gaussians and with_eval3d:
+        raise ValueError(
+            "track_pixel_gaussians is not supported when with_eval3d=True."
+        )
+
     render_median = None
+    tracked_pixel_gaussians = None
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
@@ -749,7 +764,13 @@ def rasterization(
                     viewmats_rs=viewmats_rs,
                 )
             else:
-                render_colors_, render_alphas_, render_median_ = rasterize_to_pixels(
+                track_chunk = track_pixel_gaussians and tracked_pixel_gaussians is None
+                (
+                    render_colors_,
+                    render_alphas_,
+                    render_median_,
+                    pixel_gaussians_chunk,
+                ) = rasterize_to_pixels(
                     means2d,
                     conics,
                     colors_chunk,
@@ -762,7 +783,12 @@ def rasterization(
                     backgrounds=backgrounds_chunk,
                     packed=packed,
                     absgrad=absgrad,
+                    track_pixel_gaussians=track_chunk,
+                    max_gaussians_per_pixel=max_gaussians_per_pixel,
+                    pixel_gaussian_threshold=pixel_gaussian_threshold,
                 )
+                if track_chunk:
+                    tracked_pixel_gaussians = pixel_gaussians_chunk
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
             render_medians.append(render_median_)
@@ -794,7 +820,12 @@ def rasterization(
                 viewmats_rs=viewmats_rs,
             )
         else:
-            render_colors, render_alphas, render_median = rasterize_to_pixels(
+            (
+                render_colors,
+                render_alphas,
+                render_median,
+                pixel_gaussians_full,
+            ) = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors,
@@ -807,7 +838,12 @@ def rasterization(
                 backgrounds=backgrounds,
                 packed=packed,
                 absgrad=absgrad,
+                track_pixel_gaussians=track_pixel_gaussians,
+                max_gaussians_per_pixel=max_gaussians_per_pixel,
+                pixel_gaussian_threshold=pixel_gaussian_threshold,
             )
+            if track_pixel_gaussians:
+                tracked_pixel_gaussians = pixel_gaussians_full
     if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
         # normalize the accumulated depth to get the expected depth
         if render_mode == "RGB+ED+N":
@@ -823,6 +859,12 @@ def rasterization(
             )
 
     meta["render_median"] = render_median
+    if (
+        track_pixel_gaussians
+        and tracked_pixel_gaussians is not None
+        and tracked_pixel_gaussians.numel() > 0
+    ):
+        meta["pixel_gaussians"] = tracked_pixel_gaussians
     return render_colors, render_alphas, meta
 
 

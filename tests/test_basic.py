@@ -548,7 +548,12 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     backgrounds.requires_grad = True
 
     # forward
-    render_colors, render_alphas, render_median = rasterize_to_pixels(
+    (
+        render_colors,
+        render_alphas,
+        render_median,
+        pixel_gaussians,
+    ) = rasterize_to_pixels(
         means2d,
         conics,
         colors,
@@ -560,6 +565,8 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         flatten_ids,
         backgrounds=backgrounds,
     )
+    assert pixel_gaussians.shape[-1] == 2
+    assert pixel_gaussians.numel() == 0
     _render_colors, _render_alphas = _rasterize_to_pixels(
         means2d,
         conics,
