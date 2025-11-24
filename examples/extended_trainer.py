@@ -36,7 +36,7 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
-from gsplat.strategy import DefaultStrategy, MCMCStrategy, ImprovedStrategy
+from gsplat.strategy import DefaultStrategy, ImprovedStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from utils_depth import get_implied_normal_from_depth
@@ -113,8 +113,8 @@ class Config:
     # Far plane clipping distance
     far_plane: float = 1e10
 
-    # Densification strategy selection (default / mcmc / improved)
-    strategy_type: Literal["default", "mcmc", "improved"] = "default"
+    # Densification strategy selection (default / improved)
+    strategy_type: Literal["default", "improved"] = "default"
     # Verbosity for densification logs
     strategy_verbose: bool = True
     # Densification hyper-parameters (see notes below; shared unless marked otherwise)
@@ -135,13 +135,9 @@ class Config:
     revised_opacity: bool = False
     # ImprovedStrategy-only hyper-parameter
     budget: int = 2_000_000
-    # MCMCStrategy-only hyper-parameters
-    mcmc_cap_max: int = 1_000_000
-    mcmc_noise_lr: float = 5e5
-    mcmc_min_opacity: float = 0.005
 
     # Strategy instance (constructed from the type/params above)
-    strategy: Union[DefaultStrategy, MCMCStrategy, ImprovedStrategy] = field(
+    strategy: Union[DefaultStrategy, ImprovedStrategy] = field(
         init=False, repr=False
     )
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
@@ -168,9 +164,6 @@ class Config:
     sh0_lr: float = 2.5e-3
     # LR for higher-order SH (detail)
     shN_lr: float = 2.5e-3 / 20
-
-    # Opacity regularization
-    opacity_reg: float = 0.0
 
     ### Scale regularization
     """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
@@ -273,10 +266,6 @@ class Config:
             strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
             strategy.reset_every = int(strategy.reset_every * factor)
             strategy.refine_every = int(strategy.refine_every * factor)
-        elif isinstance(strategy, MCMCStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
         elif isinstance(strategy, ImprovedStrategy):
             strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
             strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
@@ -302,16 +291,6 @@ class Config:
                 pause_refine_after_reset=self.pause_refine_after_reset,
                 absgrad=self.absgrad,
                 revised_opacity=self.revised_opacity,
-                verbose=self.strategy_verbose,
-            )
-        elif self.strategy_type == "mcmc":
-            self.strategy = MCMCStrategy(
-                cap_max=self.mcmc_cap_max,
-                noise_lr=self.mcmc_noise_lr,
-                refine_start_iter=self.refine_start_iter,
-                refine_stop_iter=self.refine_stop_iter,
-                refine_every=self.refine_every,
-                min_opacity=self.mcmc_min_opacity,
                 verbose=self.strategy_verbose,
             )
         elif self.strategy_type == "improved":
@@ -507,8 +486,6 @@ class Runner:
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
             )
-        elif isinstance(self.cfg.strategy, MCMCStrategy):
-            self.strategy_state = self.cfg.strategy.initialize_state()
         elif isinstance(self.cfg.strategy, ImprovedStrategy):
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
@@ -953,9 +930,6 @@ class Runner:
                     loss += cfg.render_normal_loss_weight * render_normal_loss
 
             # regularizations
-            if cfg.opacity_reg > 0.0:
-                loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
-
             # the smallest scale is always near 0
             if cfg.flat_reg > 0.0:
                 loss += cfg.flat_reg * self.compute_flat_loss()
@@ -1167,15 +1141,6 @@ class Runner:
                     step=step,
                     info=info,
                     packed=cfg.packed,
-                )
-            elif isinstance(self.cfg.strategy, MCMCStrategy):
-                self.cfg.strategy.step_post_backward(
-                    params=self.splats,
-                    optimizers=self.optimizers,
-                    state=self.strategy_state,
-                    step=step,
-                    info=info,
-                    lr=schedulers[0].get_last_lr()[0],
                 )
             else:
                 assert_never(self.cfg.strategy)
