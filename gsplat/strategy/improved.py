@@ -199,7 +199,7 @@ class ImprovedStrategy(Strategy):
             self.reset_count += 1
 
         # After the first two resets, perform quantile pruning 300 steps after reset
-        # 看起来似乎有没有这个机制区别不是很大？
+        # (kept disabled because it showed negligible effect in practice)
         # if self.reset_count <= 2 and step % self.reset_every == 300 and step > 300:
         #     n_quantile_prune = self._quantile_prune_gs(
         #         params=params,
@@ -289,18 +289,18 @@ class ImprovedStrategy(Strategy):
         startI = self.refine_start_iter
         endI = self.refine_stop_iter - 500
         den = endI - startI
-        # 计算 rate，防止除以 0，并确保为 float
+        # compute rate while avoiding division-by-zero and keeping float precision
         if den == 0:
             rate = 1.0
         else:
             rate = float((step - startI) / den)
-        # clamp 到 [0, 1]，避免负值或 >1 的奇异情况
+        # clamp to [0, 1] to avoid negative or >1 edge cases
         rate = max(0.0, min(1.0, rate))
 
         if rate >= 1.0:
             budget = int(self.budget)
         else:
-            # 使用 math.sqrt 对 float 做开方
+            # use math.sqrt on the float before scaling with the budget
             budget = int(math.sqrt(rate) * float(self.budget))
 
         total_qualified = int(torch.sum(is_grad_high).item())
@@ -309,12 +309,12 @@ class ImprovedStrategy(Strategy):
         final_budget = min(budget, theoretical_max)
         new_points_needed = final_budget - curr_points
 
-        # 初始化is_split掩码，全为False
+        # initialize split mask with False
         is_split = torch.zeros_like(is_grad_high, dtype=torch.bool, device=device)
-        # 创建重要性分数向量，只考虑高梯度区域
+        # create importance scores restricted to high-gradient candidates
         importance_scores = grads.clone()
-        importance_scores[~is_grad_high] = 0.0  # 屏蔽非高梯度区域
-        # 确保所有分数非负且至少有一个有效候选
+        importance_scores[~is_grad_high] = 0.0  # zero scores outside candidate set
+        # ensure non-negative scores and that at least one candidate exists
         if torch.any(importance_scores > 0):
             num_available = (importance_scores > 0).sum().item()
             actual_split_count = min(max(new_points_needed, 0), num_available)
@@ -394,6 +394,85 @@ class ImprovedStrategy(Strategy):
         threshold = torch.quantile(opacities, percentile)
         is_prune = opacities < threshold
 
+        n_prune = is_prune.sum().item()
+        if n_prune > 0:
+            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
+
+        return n_prune
+    
+    @torch.no_grad()
+    def _opacity_prune_gs(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        min_opacity: float,
+    ) -> int:
+        """Prune Gaussians with opacities below the given absolute threshold.
+
+        Args:
+            params: The parameters dictionary containing "opacities".
+            optimizers: The optimizers for the parameters.
+            state: The running state dictionary.
+            min_opacity: The absolute opacity threshold (e.g., 0.005).
+                Gaussians with opacities strictly lower than this value will be pruned.
+
+        Returns:
+            Number of Gaussians pruned.
+        """
+        opacities = torch.sigmoid(params["opacities"].flatten())
+        is_prune = opacities < min_opacity
+
+        n_prune = is_prune.sum().item()
+        if n_prune > 0:
+            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
+
+        return n_prune
+    
+    @torch.no_grad()
+    def _final_prune_gs(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        target_budget: int,
+    ) -> int:
+        """Enforce a strict budget by probabilistic pruning based on opacity.
+
+        This implements the 'Natural Selection' final pruning mechanism from the paper:
+        "Gradient-Driven Natural Selection for Compact 3D Gaussian Splatting".
+
+        Gaussians are retained based on their fitness (opacity) using Multinomial sampling,
+        simulating the survival of the fittest under a strict resource constraint.
+
+        Args:
+            params: The parameters dictionary containing "opacities".
+            optimizers: The optimizers for the parameters.
+            state: The running state dictionary.
+            target_budget: The maximum number of Gaussians to keep.
+
+        Returns:
+            Number of Gaussians pruned.
+        """
+        # 1. Fetch opacities (sigmoid) to serve as sampling weights.
+        # gsplat stores logits in params["opacities"], so activation is required.
+        opacities = torch.sigmoid(params["opacities"].flatten())
+        n_curr = opacities.shape[0]
+
+        # 2. If already under budget, nothing to prune.
+        if n_curr <= target_budget:
+            return 0
+
+        # 3. Sample indices to keep via multinomial; higher opacity increases survival chance.
+        # Use replacement=False to prevent duplicate selections.
+        keep_indices = torch.multinomial(opacities, target_budget, replacement=False)
+
+        # 4. Build the prune mask (True = delete) starting from all True
+        is_prune = torch.ones(n_curr, dtype=torch.bool, device=opacities.device)
+        # flip survivors to False so they are kept
+        is_prune[keep_indices] = False
+
+        # 5. Perform the actual removal
         n_prune = is_prune.sum().item()
         if n_prune > 0:
             remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
