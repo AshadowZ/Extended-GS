@@ -170,7 +170,7 @@ class Config:
     """ Iteration to end Natural Selection """
     reg_end: int = 23_000
     """ Base regularization strength during Natural Selection (will be adjusted dynamically) """
-    opacity_reg_lr: float = 2e-5 
+    opacity_reg_weight: float = 2e-5 
     """ Interval for Natural Selection reg updates """
     reg_interval: int = 50
     """ Final target Gaussian count (budget) """
@@ -179,14 +179,14 @@ class Config:
     ### Scale regularization
     """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
     scale to be small"""
-    flat_reg: float = 1.0
+    flat_reg_weight: float = 1.0
     """If scale regularization is enabled, a scale regularization introduced in PhysGauss
     (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians.
     This implementation adapts the PhysGauss loss to use the ratio of max to median scale
     instead of max to min, as implemented in mvsanywhere/regsplatfacto. This modification
     has been found to work better at encouraging Gaussians to be disks.
     """
-    scale_reg: float = 1.0
+    scale_reg_weight: float = 1.0
     """Threshold of ratio of Gaussian's max to median scale before applying regularization
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
     """
@@ -937,11 +937,11 @@ class Runner:
                     loss += cfg.render_normal_loss_weight * render_normal_loss
 
             # regularizations the smallest scale is always near 0
-            if cfg.flat_reg > 0.0:
-                loss += cfg.flat_reg * self.compute_flat_loss()
+            if cfg.flat_reg_weight > 0.0:
+                loss += cfg.flat_reg_weight * self.compute_flat_loss()
             # We follow the original SplatFacto implementation here and only apply this loss every 10 steps
-            if cfg.scale_reg > 0.0 and step % 10 == 0:
-                loss += cfg.scale_reg * self.compute_scale_regularisation_loss_median()
+            if cfg.scale_reg_weight > 0.0 and step % 10 == 0:
+                loss += cfg.scale_reg_weight * self.compute_scale_regularisation_loss_median()
 
             # [GNS] Regularization Loss & Early Stop Handling
             strategy_gns_finished = getattr(self.cfg.strategy, "gns_finished", True)
@@ -981,16 +981,16 @@ class Runner:
                         current_count = len(self.splats["means"])
 
                         if current_count > expected_count * 1.05:
-                            cfg.opacity_reg_lr = cfg.opacity_reg_lr * 1.2
+                            cfg.opacity_reg_weight = cfg.opacity_reg_weight * 1.2
                         elif current_count < expected_count * 0.95:
-                            cfg.opacity_reg_lr = cfg.opacity_reg_lr * 0.8
+                            cfg.opacity_reg_weight = cfg.opacity_reg_weight * 0.8
 
-                        cfg.opacity_reg_lr = max(1e-7, min(cfg.opacity_reg_lr, 1e-2))
+                        cfg.opacity_reg_weight = max(1e-7, min(cfg.opacity_reg_weight, 1e-2))
 
                         # if self.cfg.strategy_verbose:
                         #     print(
                         #         f"[GNS] Step {step}: Count={current_count}, "
-                        #         f"Target={int(expected_count)}, LR={cfg.opacity_reg_lr:.2e}"
+                        #         f"Target={int(expected_count)}, LR={cfg.opacity_reg_weight:.2e}"
                         #     )
 
                     if step < cfg.reg_start + 1000:
@@ -1000,15 +1000,15 @@ class Runner:
                             1 - current_opacities,
                         )
                         term = (opacities_logits + 20) / rate_l
-                        gns_loss = cfg.opacity_reg_lr * (torch.mean(term) ** 2)
+                        gns_loss = cfg.opacity_reg_weight * (torch.mean(term) ** 2)
                     else:
                         mean_val = torch.mean(opacities_logits)
-                        gns_loss = 3 * cfg.opacity_reg_lr * ((mean_val + 20) ** 2)
+                        gns_loss = 3 * cfg.opacity_reg_weight * ((mean_val + 20) ** 2)
 
                     loss += gns_loss
                     # if self.cfg.strategy_verbose:
                     #     print(
-                    #         f"[GNS] Step {step}: opacity_reg_lr={cfg.opacity_reg_lr:.6e}, "
+                    #         f"[GNS] Step {step}: opacity_reg_weight={cfg.opacity_reg_weight:.6e}, "
                     #         f"loss contribution={gns_loss.item():.6e}"
                     #     )
 
