@@ -13,9 +13,11 @@ from .ops import remove, reset_opa, long_axis_split
 class ImprovedStrategy(Strategy):
     """An improved strategy with budget-based Gaussian splitting.
 
-    This strategy is based on the paper:
+    This strategy is based on the papers:
     "Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering"
     https://arxiv.org/abs/2508.12313v1
+    and "Gradient-Driven Natural Selection for Compact 3D Gaussian Splatting"
+    https://arxiv.org/abs/2511.16980
 
     The strategy will:
 
@@ -23,6 +25,11 @@ class ImprovedStrategy(Strategy):
     - Periodically prune GSs with low opacity.
     - Periodically reset GSs to a lower opacity.
     - Perform quantile-based pruning after the first two resets.
+    - Optionally run the Natural Selection phase inspired by the paper above:
+        * enter a dedicated window (`reg_start`→`reg_end`) where low-opacity points are trimmed at interval `reg_interval`;
+        * dynamically adjust opacity regularization strength to encourage the population to shrink toward `final_budget`;
+        * optionally early-stop and force a probabilistic final prune once the target count is reached;
+        * finally restore the learning rate after a short delay, mirroring the workflow in "Gradient-Driven Natural Selection for Compact 3D Gaussian Splatting".
 
     If `absgrad=True`, it will use the absolute gradients instead of average gradients
     for GS splitting, following the AbsGS paper:
@@ -53,6 +60,12 @@ class ImprovedStrategy(Strategy):
           3DGS uses "means2d" gradient and 2DGS uses a similar gradient which stores
           in variable "gradient_2dgs".
         budget (int): Maximum number of Gaussians allowed. Default is 1000000.
+        enable_natural_selection (bool): Enable the Natural Selection pruning phase
+            inspired by "Gradient-Driven Natural Selection for Compact 3D Gaussian Splatting".
+        reg_start (int): Iteration to start Natural Selection.
+        reg_end (int): Iteration to stop Natural Selection (or when finished early).
+        reg_interval (int): Interval between opacity pruning steps during Natural Selection.
+        final_budget (int): Target number of Gaussians after Natural Selection finishes.
 
     Examples:
 
@@ -72,22 +85,30 @@ class ImprovedStrategy(Strategy):
     """
 
     prune_opa: float = 0.005
-    grow_grad2d: float = 0.0003
-    prune_scale3d: float = 0.1
+    grow_grad2d: float = 0.0002
+    prune_scale3d: float = 0.08
     prune_scale2d: float = 0.15
     refine_scale2d_stop_iter: int = 4000
     refine_start_iter: int = 500
-    refine_stop_iter: int = 15_000
+    refine_stop_iter: int = 15000
     reset_every: int = 3000
     refine_every: int = 100
     absgrad: bool = True
     verbose: bool = True
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
-    budget: int = 2000000
+    budget: int = 2500000
+
+    # --- [GNS] Additional params (mirror extended_trainer.Config) ---
+    enable_natural_selection: bool = False
+    reg_start: int = 15000
+    reg_end: int = 23000
+    reg_interval: int = 50
+    final_budget: int = 1000000
 
     def __post_init__(self):
         """Initialize instance variables after dataclass initialization."""
         self.reset_count = 0
+        self.gns_finished = False
 
     def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
@@ -130,6 +151,39 @@ class ImprovedStrategy(Strategy):
         for key in ["means", "scales", "quats", "opacities"]:
             assert key in params, f"{key} is required in params but missing."
 
+    def force_stop_natural_selection(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        target_budget: int,
+    ) -> int:
+        """Force a final prune and mark natural selection as finished."""
+        if self.gns_finished or not self.enable_natural_selection:
+            return 0
+
+        if self.verbose:
+            print(
+                f"[GNS] Early Stopping triggered! Force pruning to {target_budget}..."
+            )
+
+        n_pruned = self._final_prune_gs(
+            params=params,
+            optimizers=optimizers,
+            state=state,
+            target_budget=target_budget,
+        )
+
+        if self.verbose:
+            print(
+                f"[GNS] Early stop pruned {n_pruned} gaussians. "
+                f"Now having {len(params['means'])} GSs."
+            )
+
+        self.gns_finished = True
+        torch.cuda.empty_cache()
+        return n_pruned
+
     def step_pre_backward(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
@@ -154,6 +208,48 @@ class ImprovedStrategy(Strategy):
         packed: bool = False,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
+        # --- [GNS] Natural Selection Pruning Logic (must run first) ---
+        # Needs to happen before refine_stop_iter since GNS usually runs post-densification
+        if self.enable_natural_selection and not self.gns_finished:
+            # 1. Continuous pruning to remove very transparent Gaussians during the window
+            if self.reg_start <= step < self.reg_end and step % self.reg_interval == 0:
+                n_curr = len(params["means"])
+                if n_curr > self.final_budget:
+                    n_pruned = self._opacity_prune_gs(
+                        params=params,
+                        optimizers=optimizers,
+                        state=state,
+                        min_opacity=0.001,
+                    )
+                    if self.verbose and n_pruned > 0:
+                        print(
+                            f"[GNS] Step {step}: Removed {n_pruned} GSs "
+                            f"below opacity threshold. Now having {len(params['means'])} GSs."
+                        )
+
+            # 2. Final budget prune that enforces the probabilistic cap at the end
+            if step == self.reg_end:
+                if self.verbose:
+                    print(f"[GNS] Step {step}: Running Final Budget Prune to {self.final_budget}...")
+                
+                n_pruned = self._final_prune_gs(
+                    params=params, 
+                    optimizers=optimizers, 
+                    state=state, 
+                    target_budget=self.final_budget
+                )
+                
+                if self.verbose:
+                    print(
+                        f"[GNS] Final Prune removed {n_pruned} gaussians. "
+                        f"Now having {len(params['means'])} GSs."
+                    )
+                
+                # Clean up memory after large-scale pruning
+                torch.cuda.empty_cache()
+                self.gns_finished = True
+        # ----------------------------------------------------------
+
         if step >= self.refine_stop_iter:
             return
 
@@ -196,6 +292,11 @@ class ImprovedStrategy(Strategy):
                 state=state,
                 value=self.prune_opa * 10.0,
             )
+            if self.verbose:
+                print(
+                    f"Step {step}: reset opacities to {self.prune_opa * 10.0}. "
+                    f"Now having {len(params['means'])} GSs."
+                )
             self.reset_count += 1
 
         # After the first two resets, perform quantile pruning 300 steps after reset

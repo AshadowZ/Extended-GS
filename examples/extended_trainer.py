@@ -118,7 +118,7 @@ class Config:
     # Verbosity for densification logs
     strategy_verbose: bool = True
     # Densification hyper-parameters (see notes below; shared unless marked otherwise)
-    prune_opa: float = 0.05
+    prune_opa: float = 0.005
     grow_grad2d: float = 0.0002
     prune_scale3d: float = 0.08
     prune_scale2d: float = 0.15
@@ -134,7 +134,7 @@ class Config:
     pause_refine_after_reset: int = 0
     revised_opacity: bool = False
     # ImprovedStrategy-only hyper-parameter
-    budget: int = 2_000_000
+    budget: Optional[int] = None
 
     # Strategy instance (constructed from the type/params above)
     strategy: Union[DefaultStrategy, ImprovedStrategy] = field(
@@ -164,6 +164,20 @@ class Config:
     sh0_lr: float = 2.5e-3
     # LR for higher-order SH (detail)
     shN_lr: float = 2.5e-3 / 20
+
+    # --- Natural Selection Pruning Params ---
+    # Whether to enable the Natural Selection pruning phase
+    enable_natural_selection: bool = True
+    # Iteration to start Natural Selection (usually post-densification, e.g., after 15000)
+    reg_start: int = 15_000
+    # Iteration to end Natural Selection
+    reg_end: int = 23_000
+    # Base regularization strength during Natural Selection (will be adjusted dynamically)
+    opacity_reg_lr: float = 2e-5 
+    # Interval for Natural Selection reg updates
+    reg_interval: int = 50
+    # Final target Gaussian count (budget)
+    final_budget: int = 1000000
 
     ### Scale regularization
     """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
@@ -251,6 +265,8 @@ class Config:
     with_eval3d: bool = False
 
     def __post_init__(self):
+        if self.budget is None:
+            self.budget = self.final_budget * 2.5
         self.rebuild_strategy()
 
     def adjust_steps(self, factor: float):
@@ -307,6 +323,11 @@ class Config:
                 absgrad=self.absgrad,
                 verbose=self.strategy_verbose,
                 budget=self.budget,
+                enable_natural_selection=self.enable_natural_selection,
+                reg_start=self.reg_start,
+                reg_end=self.reg_end,
+                reg_interval=self.reg_interval,
+                final_budget=self.final_budget,
             )
         else:
             assert_never(self.strategy_type)
@@ -662,6 +683,7 @@ class Runner:
 
         max_steps = cfg.max_steps
         init_step = 0
+        ns_stop_step: Optional[int] = None
 
         schedulers = [
             # means has a learning rate schedule, that end at 0.01 of the initial value
@@ -856,6 +878,14 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
+            # --- [GNS] Opacity Learning Rate Scaling ---
+            if cfg.enable_natural_selection and step == cfg.reg_start:
+                print(
+                    f"[GNS] Starting Natural Selection: Scaling Opacity LR by 4x at step {step}"
+                )
+                for param_group in self.optimizers["opacities"].param_groups:
+                    param_group["lr"] *= 4.0
+
             self.cfg.strategy.step_pre_backward(
                 params=self.splats,
                 optimizers=self.optimizers,
@@ -929,13 +959,92 @@ class Runner:
                     )
                     loss += cfg.render_normal_loss_weight * render_normal_loss
 
-            # regularizations
-            # the smallest scale is always near 0
+            # regularizations the smallest scale is always near 0
             if cfg.flat_reg > 0.0:
                 loss += cfg.flat_reg * self.compute_flat_loss()
             # We follow the original SplatFacto implementation here and only apply this loss every 10 steps
             if cfg.scale_reg > 0.0 and step % 10 == 0:
                 loss += cfg.scale_reg * self.compute_scale_regularisation_loss_median()
+
+            # --- [GNS] Regularization Loss & Early Stop Handling ---
+            strategy_gns_finished = getattr(self.cfg.strategy, "gns_finished", True)
+            if (
+                cfg.enable_natural_selection
+                and cfg.reg_end >= step >= cfg.reg_start
+                and not strategy_gns_finished
+            ):
+                current_gs_count = len(self.splats["means"])
+                if step > cfg.reg_start and current_gs_count < cfg.final_budget * 1.05:
+                    print(
+                        f"[GNS] Count {current_gs_count} < 1.05 * Budget. "
+                        f"Stopping Natural Selection early at step {step}."
+                    )
+                    if hasattr(self.cfg.strategy, "force_stop_natural_selection"):
+                        self.cfg.strategy.force_stop_natural_selection(
+                            self.splats,
+                            self.optimizers,
+                            self.strategy_state,
+                            cfg.final_budget,
+                        )
+                    ns_stop_step = step
+                elif (step - 1) % cfg.reg_interval == 0:
+                    opacities_logits = self.splats["opacities"].flatten()
+
+                    if (step - 1) % 100 == 0:
+                        if not hasattr(self, "gns_start_count"):
+                            self.gns_start_count = len(self.splats["means"])
+                            if self.gns_start_count < cfg.final_budget:
+                                self.gns_start_count = cfg.final_budget + 1000
+
+                        progress = (step - cfg.reg_start) / (cfg.reg_end - cfg.reg_start)
+                        progress = max(0.0, min(1.0, progress))
+                        expected_count = self.gns_start_count - (
+                            self.gns_start_count - cfg.final_budget
+                        ) * progress
+                        current_count = len(self.splats["means"])
+
+                        if current_count > expected_count * 1.05:
+                            cfg.opacity_reg_lr = cfg.opacity_reg_lr * 1.2
+                        elif current_count < expected_count * 0.95:
+                            cfg.opacity_reg_lr = cfg.opacity_reg_lr * 0.8
+
+                        cfg.opacity_reg_lr = max(1e-7, min(cfg.opacity_reg_lr, 1e-2))
+
+                        if self.cfg.strategy_verbose:
+                            print(
+                                f"[GNS] Step {step}: Count={current_count}, "
+                                f"Target={int(expected_count)}, LR={cfg.opacity_reg_lr:.2e}"
+                            )
+
+                    if step < cfg.reg_start + 1000:
+                        current_opacities = torch.sigmoid(opacities_logits)
+                        rate_l = torch.max(
+                            torch.ones_like(current_opacities) * 0.05,
+                            1 - current_opacities,
+                        )
+                        term = (opacities_logits + 20) / rate_l
+                        gns_loss = cfg.opacity_reg_lr * (torch.mean(term) ** 2)
+                    else:
+                        mean_val = torch.mean(opacities_logits)
+                        gns_loss = 3 * cfg.opacity_reg_lr * ((mean_val + 20) ** 2)
+
+                    loss += gns_loss
+                    if self.cfg.strategy_verbose:
+                        print(
+                            f"[GNS] Step {step}: opacity_reg_lr={cfg.opacity_reg_lr:.6e}, "
+                            f"loss contribution={gns_loss.item():.6e}"
+                        )
+
+            if cfg.enable_natural_selection and step == cfg.reg_end and ns_stop_step is None:
+                ns_stop_step = step
+
+            if ns_stop_step is not None and step == ns_stop_step + 1000:
+                print(
+                    f"[GNS] Restoring Opacity LR (1000 steps after stop) at step {step}"
+                )
+                for param_group in self.optimizers["opacities"].param_groups:
+                    param_group["lr"] /= 4.0
+                ns_stop_step = None
 
             loss.backward()
 
@@ -1093,16 +1202,16 @@ class Runner:
             # Implementation of gradient accumulation trick from:
             # "Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering"
             # https://arxiv.org/abs/2508.12313v1
-            if step <= 15000:
-                # Every step update for first 15000 iterations
+            if step <= 20000:
+                # Every step update for first 20000 iterations
                 for optimizer in self.optimizers.values():
                     if cfg.visible_adam:
                         optimizer.step(visibility_mask)
                     else:
                         optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
-            elif step <= 22500:
-                # Accumulate 5 steps, update every 5 steps for 15000-22500 iterations
+            elif step <= 24000:
+                # Accumulate 5 steps, update every 5 steps for 20000-24000 iterations
                 if step % 5 == 0:
                     for optimizer in self.optimizers.values():
                         if cfg.visible_adam:
@@ -1111,7 +1220,7 @@ class Runner:
                             optimizer.step()
                         optimizer.zero_grad(set_to_none=True)
             else:
-                # Accumulate 20 steps, update every 20 steps after 22500 iterations
+                # Accumulate 20 steps, update every 20 steps after 24000 iterations
                 if step % 20 == 0:
                     for optimizer in self.optimizers.values():
                         if cfg.visible_adam:
