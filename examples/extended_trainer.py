@@ -29,7 +29,15 @@ from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
-from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+
+from utils import (
+    AppearanceOptModule,
+    CameraOptModule,
+    get_implied_normal_from_depth,
+    knn,
+    rgb_to_sh,
+    set_random_seed,
+)
 
 from gsplat import export_splats
 from gsplat.compression import PngCompression
@@ -39,7 +47,6 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, ImprovedStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
-from utils_depth import get_implied_normal_from_depth
 
 
 @dataclass
@@ -704,6 +711,9 @@ class Runner:
 
         # Training loop.
         global_tic = time.time()
+        cached_grid_xy = None
+        cached_h, cached_w = -1, -1
+
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
@@ -838,15 +848,22 @@ class Runner:
                 colors, depths, render_normals = renders, None, None
 
             if cfg.use_bilateral_grid:
-                grid_y, grid_x = torch.meshgrid(
-                    (torch.arange(height, device=self.device) + 0.5) / height,
-                    (torch.arange(width, device=self.device) + 0.5) / width,
-                    indexing="ij",
-                )
-                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+                if cached_grid_xy is None or cached_h != height or cached_w != width:
+                    cached_h, cached_w = height, width
+                    grid_y, grid_x = torch.meshgrid(
+                        (torch.arange(height, device=self.device) + 0.5) / height,
+                        (torch.arange(width, device=self.device) + 0.5) / width,
+                        indexing="ij",
+                    )
+                    cached_grid_xy = (
+                        torch.stack([grid_x, grid_y], dim=-1)
+                        .unsqueeze(0)
+                        .detach()
+                    )
+                batch_grid_xy = cached_grid_xy.expand(colors.shape[0], -1, -1, -1)
                 colors = slice(
                     self.bil_grids,
-                    grid_xy.expand(colors.shape[0], -1, -1, -1),
+                    batch_grid_xy,
                     colors,
                     image_ids.unsqueeze(-1),
                 )["rgb"]
@@ -877,8 +894,11 @@ class Runner:
                 colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            # tv loss
             if cfg.use_bilateral_grid:
-                tvloss = 10 * total_variation_loss(self.bil_grids.grids)
+                unique_grid_ids = torch.unique(image_ids)
+                active_grids = self.bil_grids.grids[unique_grid_ids]
+                tvloss = 10 * total_variation_loss(active_grids)
                 loss += tvloss
 
             # depth loss
