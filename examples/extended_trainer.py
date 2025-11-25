@@ -75,9 +75,6 @@ class Config:
 
     # Batch size for training. Learning rates are scaled automatically
     batch_size: int = 1
-    # A global factor to scale the number of training steps
-    steps_scaler: float = 1.0
-
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
@@ -165,18 +162,18 @@ class Config:
     # LR for higher-order SH (detail)
     shN_lr: float = 2.5e-3 / 20
 
-    # --- Natural Selection Pruning Params ---
-    # Whether to enable the Natural Selection pruning phase
+    ### [GNS] Natural Selection Pruning Params
+    """ Whether to enable the Natural Selection pruning phase """
     enable_natural_selection: bool = True
-    # Iteration to start Natural Selection (usually post-densification, e.g., after 15000)
+    """ Iteration to start Natural Selection (usually post-densification, e.g., after 15000) """
     reg_start: int = 15_000
-    # Iteration to end Natural Selection
+    """ Iteration to end Natural Selection """
     reg_end: int = 23_000
-    # Base regularization strength during Natural Selection (will be adjusted dynamically)
+    """ Base regularization strength during Natural Selection (will be adjusted dynamically) """
     opacity_reg_lr: float = 2e-5 
-    # Interval for Natural Selection reg updates
+    """ Interval for Natural Selection reg updates """
     reg_interval: int = 50
-    # Final target Gaussian count (budget)
+    """ Final target Gaussian count (budget) """
     final_budget: int = 1000000
 
     ### Scale regularization
@@ -268,27 +265,6 @@ class Config:
         if self.budget is None:
             self.budget = self.final_budget * 2.5
         self.rebuild_strategy()
-
-    def adjust_steps(self, factor: float):
-        self.eval_steps = [int(i * factor) for i in self.eval_steps]
-        self.save_steps = [int(i * factor) for i in self.save_steps]
-        self.ply_steps = [int(i * factor) for i in self.ply_steps]
-        self.max_steps = int(self.max_steps * factor)
-        self.sh_degree_interval = int(self.sh_degree_interval * factor)
-
-        strategy = self.strategy
-        if isinstance(strategy, DefaultStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.reset_every = int(strategy.reset_every * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        elif isinstance(strategy, ImprovedStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.reset_every = int(strategy.reset_every * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        else:
-            assert_never(strategy)
 
     def rebuild_strategy(self):
         if self.strategy_type == "default":
@@ -419,6 +395,7 @@ def create_splats_with_optimizers(
             eps=1e-15 / math.sqrt(BS),
             # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
+            fused=True,
         )
         for name, _, lr in params
     }
@@ -878,7 +855,7 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            # --- [GNS] Opacity Learning Rate Scaling ---
+            # [GNS] Opacity Learning Rate Scaling
             if cfg.enable_natural_selection and step == cfg.reg_start:
                 print(
                     f"[GNS] Starting Natural Selection: Scaling Opacity LR by 4x at step {step}"
@@ -894,7 +871,7 @@ class Runner:
                 info=info,
             )
 
-            # loss
+            # color loss
             l1loss = F.l1_loss(colors, pixels)
             ssimloss = 1.0 - fused_ssim(
                 colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
@@ -918,7 +895,7 @@ class Runner:
             if (need_consistency_normal or need_normal_prior) and depths is not None:
                 surf_normals_from_depth = get_implied_normal_from_depth(depths, Ks)
 
-            # consistency normal loss
+            # normal consistency loss
             if (
                 need_consistency_normal
                 and surf_normals_from_depth is not None
@@ -932,13 +909,13 @@ class Runner:
                 )
                 loss += cfg.consistency_normal_loss_weight * consistency_norm_loss
 
-            # normal loss
+            # normal prior loss
             if need_normal_prior and surf_normals_from_depth is not None:
                 mask = torch.ones_like(depths).float()  # [B,H,W,1]
                 if normal_prior_mask is not None:
                     mask = mask * normal_prior_mask
 
-                # Surface normal loss (from depth)
+                # surface normal loss (from depth)
                 if (
                     cfg.surf_normal_loss_weight > 0
                     and step >= cfg.surf_normal_loss_activation_step
@@ -948,7 +925,7 @@ class Runner:
                     )
                     loss += cfg.surf_normal_loss_weight * surf_normal_loss
 
-                # Rendered normal loss
+                # rendered normal loss
                 if (
                     cfg.render_normal_loss_weight > 0
                     and step >= cfg.render_normal_loss_activation_step
@@ -966,7 +943,7 @@ class Runner:
             if cfg.scale_reg > 0.0 and step % 10 == 0:
                 loss += cfg.scale_reg * self.compute_scale_regularisation_loss_median()
 
-            # --- [GNS] Regularization Loss & Early Stop Handling ---
+            # [GNS] Regularization Loss & Early Stop Handling
             strategy_gns_finished = getattr(self.cfg.strategy, "gns_finished", True)
             if (
                 cfg.enable_natural_selection
@@ -1010,11 +987,11 @@ class Runner:
 
                         cfg.opacity_reg_lr = max(1e-7, min(cfg.opacity_reg_lr, 1e-2))
 
-                        if self.cfg.strategy_verbose:
-                            print(
-                                f"[GNS] Step {step}: Count={current_count}, "
-                                f"Target={int(expected_count)}, LR={cfg.opacity_reg_lr:.2e}"
-                            )
+                        # if self.cfg.strategy_verbose:
+                        #     print(
+                        #         f"[GNS] Step {step}: Count={current_count}, "
+                        #         f"Target={int(expected_count)}, LR={cfg.opacity_reg_lr:.2e}"
+                        #     )
 
                     if step < cfg.reg_start + 1000:
                         current_opacities = torch.sigmoid(opacities_logits)
@@ -1029,11 +1006,11 @@ class Runner:
                         gns_loss = 3 * cfg.opacity_reg_lr * ((mean_val + 20) ** 2)
 
                     loss += gns_loss
-                    if self.cfg.strategy_verbose:
-                        print(
-                            f"[GNS] Step {step}: opacity_reg_lr={cfg.opacity_reg_lr:.6e}, "
-                            f"loss contribution={gns_loss.item():.6e}"
-                        )
+                    # if self.cfg.strategy_verbose:
+                    #     print(
+                    #         f"[GNS] Step {step}: opacity_reg_lr={cfg.opacity_reg_lr:.6e}, "
+                    #         f"loss contribution={gns_loss.item():.6e}"
+                    #     )
 
             if cfg.enable_natural_selection and step == cfg.reg_end and ns_stop_step is None:
                 ns_stop_step = step
@@ -1738,7 +1715,6 @@ if __name__ == "__main__":
 
     cfg = tyro.cli(Config)
     cfg.rebuild_strategy()
-    cfg.adjust_steps(cfg.steps_scaler)
 
     # Import BilateralGrid and related functions based on configuration
     if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:

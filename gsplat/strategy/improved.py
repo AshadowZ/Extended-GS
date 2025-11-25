@@ -98,7 +98,7 @@ class ImprovedStrategy(Strategy):
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
     budget: int = 2500000
 
-    # --- [GNS] Additional params (mirror extended_trainer.Config) ---
+    # [GNS] Additional params (mirror extended_trainer.Config)
     enable_natural_selection: bool = False
     reg_start: int = 15000
     reg_end: int = 23000
