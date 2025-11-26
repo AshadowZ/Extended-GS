@@ -205,9 +205,9 @@ def run_hloc(
         )
 
     # =========================================================================
-    # Post-processing: Image Undistortion
+    # Post-processing: Image Undistortion OR Data Migration
     # =========================================================================
-    CONSOLE.print("\n[bold yellow]🚀 Starting image undistortion via pycolmap...[/bold yellow]")
+    CONSOLE.print("\n[bold yellow]🚀 Starting post-processing...[/bold yellow]")
 
     if image_dir.parent.name == "distorted":
         project_root = image_dir.parent.parent
@@ -215,64 +215,80 @@ def run_hloc(
         project_root = image_dir.parent
         CONSOLE.print("[bold red]Warning: Unexpected directory structure. Assuming parent as root.[/bold red]")
 
-    try:
-        CONSOLE.print("🔧 Running pycolmap.undistort_images...")
-        CONSOLE.print(f"   Input Model:  {sfm_dir}")
-        CONSOLE.print(f"   Input Images: {image_dir}")
-        CONSOLE.print(f"   Output Root:  {project_root}")
+    target_images_dir = project_root / "images"
+    target_sparse_dir = project_root / "sparse" / "0"
 
-        options = pycolmap.UndistortCameraOptions()  # type: ignore
-        options.max_image_size = 2000
+    if camera_model in [CameraModel.PINHOLE, CameraModel.SIMPLE_PINHOLE]:
+        CONSOLE.print(f"[bold green]ℹ️ Camera model is {camera_model.name}. Skipping undistortion.[/bold green]")
+        CONSOLE.print("🔄 Migrating data to 3DGS standard format...")
 
-        pycolmap.undistort_images(  # type: ignore
-            output_path=str(project_root),
-            input_path=str(sfm_dir),
-            image_path=str(image_dir),
-            output_type="COLMAP",
-            undistort_options=options,
-        )
+        if target_images_dir.exists():
+            shutil.rmtree(target_images_dir)
+        shutil.copytree(image_dir, target_images_dir)
 
-        sparse_root = project_root / "sparse"
-        if sparse_root.exists():
-            sparse_zero = sparse_root / "0"
-            sparse_zero.mkdir(parents=True, exist_ok=True)
-            moved_any = False
-            for item in list(sparse_root.iterdir()):
-                if item == sparse_zero:
-                    continue
-                destination = sparse_zero / item.name
-                if destination.exists():
-                    CONSOLE.print(
-                        f"[bold red]Warning:[/bold red] Destination already exists, skipping move of {item}"
-                    )
-                    continue
-                shutil.move(str(item), str(destination))
-                moved_any = True
-            if moved_any:
-                CONSOLE.print("  > Organized sparse results under sparse/0")
+        if target_sparse_dir.exists():
+            shutil.rmtree(target_sparse_dir)
+        target_sparse_dir.mkdir(parents=True, exist_ok=True)
 
-        CONSOLE.print(f"[bold green]✅ Undistortion complete![/bold green]")
-        CONSOLE.print(f"  > 3DGS Ready Images: {project_root / 'images'}")
-        CONSOLE.print(f"  > 3DGS Ready Sparse: {project_root / 'sparse' / '0'}")
+        for filename in ["images.bin", "cameras.bin", "points3D.bin"]:
+            src = sfm_dir / filename
+            dst = target_sparse_dir / filename
+            if src.exists():
+                shutil.copy2(src, dst)
 
-        # 清理 pycolmap 生成的辅助脚本，避免根目录残留
-        for script_name in ("run-colmap-geometric.sh", "run-colmap-photometric.sh"):
-            script_path = project_root / script_name
-            if script_path.exists():
+        CONSOLE.print(f"[bold green]✅ Data migration complete![/bold green]")
+    else:
+        CONSOLE.print(f"[bold yellow]🔧 Running pycolmap.undistort_images for {camera_model.name}...[/bold yellow]")
+
+        try:
+            CONSOLE.print(f"   Input Model:  {sfm_dir}")
+            CONSOLE.print(f"   Input Images: {image_dir}")
+            CONSOLE.print(f"   Output Root:  {project_root}")
+
+            options = pycolmap.UndistortCameraOptions()  # type: ignore
+            options.max_image_size = 2000
+
+            pycolmap.undistort_images(  # type: ignore
+                output_path=str(project_root),
+                input_path=str(sfm_dir),
+                image_path=str(image_dir),
+                output_type="COLMAP",
+                undistort_options=options,
+            )
+
+            sparse_root = project_root / "sparse"
+            if sparse_root.exists():
+                sparse_zero = sparse_root / "0"
+                sparse_zero.mkdir(parents=True, exist_ok=True)
+                for item in list(sparse_root.iterdir()):
+                    if item == sparse_zero:
+                        continue
+                    if item.suffix == ".bin":
+                        shutil.move(str(item), str(sparse_zero / item.name))
+
+            for script_name in ("run-colmap-geometric.sh", "run-colmap-photometric.sh"):
+                script_path = project_root / script_name
+                if script_path.exists():
+                    try:
+                        script_path.unlink()
+                        CONSOLE.print(f"  > Removed helper script: {script_path}")
+                    except OSError as cleanup_err:
+                        CONSOLE.print(
+                            f"[bold red]Warning:[/bold red] Failed to remove {script_path}: {cleanup_err}"
+                        )
+
+            stereo_dir = project_root / "stereo"
+            if stereo_dir.exists():
                 try:
-                    script_path.unlink()
-                    CONSOLE.print(f"  > Removed helper script: {script_path}")
+                    shutil.rmtree(stereo_dir)
+                    CONSOLE.print(f"  > Removed stereo directory: {stereo_dir}")
                 except OSError as cleanup_err:
-                    CONSOLE.print(
-                        f"[bold red]Warning:[/bold red] Failed to remove {script_path}: {cleanup_err}"
-                    )
+                    CONSOLE.print(f"[bold red]Warning:[/bold red] Failed to remove {stereo_dir}: {cleanup_err}")
 
-        stereo_dir = project_root / "stereo"
-        if stereo_dir.exists():
-            try:
-                shutil.rmtree(stereo_dir)
-                CONSOLE.print(f"  > Removed stereo directory: {stereo_dir}")
-            except OSError as cleanup_err:
-                CONSOLE.print(f"[bold red]Warning:[/bold red] Failed to remove {stereo_dir}: {cleanup_err}")
-    except Exception as err:  # pragma: no cover - best effort logging
-        CONSOLE.print(f"[bold red]❌ Undistortion failed: {err}[/bold red]")
+            CONSOLE.print(f"[bold green]✅ Undistortion complete![/bold green]")
+        except Exception as err:  # pragma: no cover - best effort logging
+            CONSOLE.print(f"[bold red]❌ Undistortion failed: {err}[/bold red]")
+            return
+
+    CONSOLE.print(f"  > 3DGS Ready Images: {target_images_dir}")
+    CONSOLE.print(f"  > 3DGS Ready Sparse: {target_sparse_dir}")
