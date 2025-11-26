@@ -370,7 +370,7 @@ Powered by <cite>gsplat</cite>’s efficient CUDA implementation, the training t
 </section>
 <section id="feature-ablation">
 <h2>Feature Ablation<a class="headerlink" href="#feature-ablation" title="Link to this heading">¶</a></h2>
-<p>Evaluation of features provided in <cite>gsplat</cite> on Mip-NeRF (averaged over 7 scenes). We ablate <cite>gsplat</cite> with default settings, with absgrad and mcmc densification strategies, and antialiased mode.
+<p>Evaluation of features provided in <cite>gsplat</cite> on Mip-NeRF (averaged over 7 scenes). We ablate <cite>gsplat</cite> with default settings, the absgrad densification heuristic, and antialiased mode.
 Absgrad method uses <cite>–grow_grad2d 0.0006</cite> config. These results are obtained with an A100.</p>
 <div class="table-wrapper docutils container">
 <table class="docutils align-default">
@@ -409,45 +409,13 @@ Absgrad method uses <cite>–grow_grad2d 0.0006</cite> config. These results are
 <td><p>5.87</p></td>
 <td><p>19.52</p></td>
 </tr>
-<tr class="row-odd"><td><p>mcmc  (1 mill)</p></td>
-<td><p>29.18</p></td>
-<td><p>0.87</p></td>
-<td><p>0.14</p></td>
-<td><p>1000000</p></td>
-<td><p>1.98</p></td>
-<td><p>15.42</p></td>
-</tr>
-<tr class="row-even"><td><p>mcmc  (2 mill)</p></td>
-<td><p>29.53</p></td>
-<td><p>0.88</p></td>
-<td><p>0.13</p></td>
-<td><p>2000000</p></td>
-<td><p>3.43</p></td>
-<td><p>21.79</p></td>
-</tr>
-<tr class="row-odd"><td><p>mcmc  (3 mill)</p></td>
-<td><p>29.65</p></td>
-<td><p>0.89</p></td>
-<td><p>0.12</p></td>
-<td><p>3000000</p></td>
-<td><p>4.99</p></td>
-<td><p>27.63</p></td>
-</tr>
-<tr class="row-even"><td><p>absgrad &amp; antialiased</p></td>
+<tr class="row-odd"><td><p>absgrad &amp; antialiased</p></td>
 <td><p>29.14</p></td>
 <td><p>0.88</p></td>
 <td><p>0.13</p></td>
 <td><p>2563156</p></td>
 <td><p>4.57</p></td>
 <td><p>18.43</p></td>
-</tr>
-<tr class="row-odd"><td><p>mcmc &amp; antialiased</p></td>
-<td><p>29.23</p></td>
-<td><p>0.87</p></td>
-<td><p>0.14</p></td>
-<td><p>1000000</p></td>
-<td><p>2.00</p></td>
-<td><p>15.75</p></td>
 </tr>
 </tbody>
 </table>

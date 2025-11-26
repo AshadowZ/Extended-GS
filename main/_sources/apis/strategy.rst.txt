@@ -72,5 +72,5 @@ Below are the strategies that are currently implemented in `gsplat`:
 .. autoclass:: DefaultStrategy
     :members:
 
-.. autoclass:: MCMCStrategy
+.. autoclass:: ImprovedStrategy
     :members:
