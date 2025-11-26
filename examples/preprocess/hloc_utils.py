@@ -20,6 +20,7 @@ Requires hloc module from : https://github.com/cvg/Hierarchical-Localization
 # limitations under the License.
 
 import sys
+import shutil
 from pathlib import Path
 from typing import Literal
 
@@ -59,13 +60,11 @@ def run_hloc(
         "sosnet",
         "disk",
         "aliked-n16",
-        "xfeat",
     ] = "superpoint_aachen",
     matcher_type: Literal[
         "superpoint+lightglue",
         "disk+lightglue",
         "aliked+lightglue",
-        "xfeat+lighterglue",
         "superglue",
         "superglue-fast",
         "NN-superpoint",
@@ -204,3 +203,76 @@ def run_hloc(
             image_options=image_options,
             verbose=verbose,
         )
+
+    # =========================================================================
+    # Post-processing: Image Undistortion
+    # =========================================================================
+    CONSOLE.print("\n[bold yellow]🚀 Starting image undistortion via pycolmap...[/bold yellow]")
+
+    if image_dir.parent.name == "distorted":
+        project_root = image_dir.parent.parent
+    else:
+        project_root = image_dir.parent
+        CONSOLE.print("[bold red]Warning: Unexpected directory structure. Assuming parent as root.[/bold red]")
+
+    try:
+        CONSOLE.print("🔧 Running pycolmap.undistort_images...")
+        CONSOLE.print(f"   Input Model:  {sfm_dir}")
+        CONSOLE.print(f"   Input Images: {image_dir}")
+        CONSOLE.print(f"   Output Root:  {project_root}")
+
+        options = pycolmap.UndistortCameraOptions()  # type: ignore
+        options.max_image_size = 2000
+
+        pycolmap.undistort_images(  # type: ignore
+            output_path=str(project_root),
+            input_path=str(sfm_dir),
+            image_path=str(image_dir),
+            output_type="COLMAP",
+            undistort_options=options,
+        )
+
+        sparse_root = project_root / "sparse"
+        if sparse_root.exists():
+            sparse_zero = sparse_root / "0"
+            sparse_zero.mkdir(parents=True, exist_ok=True)
+            moved_any = False
+            for item in list(sparse_root.iterdir()):
+                if item == sparse_zero:
+                    continue
+                destination = sparse_zero / item.name
+                if destination.exists():
+                    CONSOLE.print(
+                        f"[bold red]Warning:[/bold red] Destination already exists, skipping move of {item}"
+                    )
+                    continue
+                shutil.move(str(item), str(destination))
+                moved_any = True
+            if moved_any:
+                CONSOLE.print("  > Organized sparse results under sparse/0")
+
+        CONSOLE.print(f"[bold green]✅ Undistortion complete![/bold green]")
+        CONSOLE.print(f"  > 3DGS Ready Images: {project_root / 'images'}")
+        CONSOLE.print(f"  > 3DGS Ready Sparse: {project_root / 'sparse' / '0'}")
+
+        # 清理 pycolmap 生成的辅助脚本，避免根目录残留
+        for script_name in ("run-colmap-geometric.sh", "run-colmap-photometric.sh"):
+            script_path = project_root / script_name
+            if script_path.exists():
+                try:
+                    script_path.unlink()
+                    CONSOLE.print(f"  > Removed helper script: {script_path}")
+                except OSError as cleanup_err:
+                    CONSOLE.print(
+                        f"[bold red]Warning:[/bold red] Failed to remove {script_path}: {cleanup_err}"
+                    )
+
+        stereo_dir = project_root / "stereo"
+        if stereo_dir.exists():
+            try:
+                shutil.rmtree(stereo_dir)
+                CONSOLE.print(f"  > Removed stereo directory: {stereo_dir}")
+            except OSError as cleanup_err:
+                CONSOLE.print(f"[bold red]Warning:[/bold red] Failed to remove {stereo_dir}: {cleanup_err}")
+    except Exception as err:  # pragma: no cover - best effort logging
+        CONSOLE.print(f"[bold red]❌ Undistortion failed: {err}[/bold red]")
