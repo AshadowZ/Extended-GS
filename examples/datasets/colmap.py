@@ -150,12 +150,12 @@ class Parser:
         if len(imdata) == 0:
             raise ValueError("No images found in COLMAP.")
 
-        # Check if any camera has distortion (non-PINHOLE models)
-        has_distortion = any(  # error
-            camtype != "perspective" for camtype in camtype_dict.values()
-        )
+        # Determine if any camera still carries distortion parameters
+        has_distortion = any(len(params) > 0 for params in params_dict.values())
         if has_distortion:
-            print("Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
+            print("Warning: COLMAP Camera parameters indicate distortion.")
+        else:
+            print("Info: COLMAP images are already undistorted (no distortion params).")
 
         c2w_mats = np.stack(c2w_mats, axis=0)
 
