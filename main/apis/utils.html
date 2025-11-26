@@ -577,7 +577,7 @@ tile ids, respectively. Int64 [n_isects]</p></li>
 <li><p><strong>Rendered colors</strong>. […, image_height, image_width, channels]</p></li>
 <li><p><strong>Rendered alphas</strong>. […, image_height, image_width, 1]</p></li>
 <li><p><strong>Rendered median depth</strong>. […, image_height, image_width, 1]</p></li>
-<li><p><strong>Pixel-to-Gaussian pairs</strong>. [K, 2] with <cite>(gaussian_id, pixel_id)</cite>；若 <cite>track_pixel_gaussians=False</cite> 则返回空 tensor。</p></li>
+<li><p><strong>Pixel-to-Gaussian pairs</strong>. [K, 2] with <cite>(gaussian_id, pixel_id)</cite>; returns an empty tensor if <cite>track_pixel_gaussians=False</cite>.</p></li>
 </ul>
 </p>
 </dd>

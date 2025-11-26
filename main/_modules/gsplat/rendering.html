@@ -931,18 +931,17 @@
 
     <span class="c1"># Rasterize to pixels</span>
     <span class="k">if</span> <span class="n">render_mode</span> <span class="o">==</span> <span class="s2">&quot;RGB+ED+N&quot;</span><span class="p">:</span>
-        <span class="c1"># # 只适用于单场景单图像渲染</span>
+        <span class="c1"># NOTE: The following example code is only valid for single-scene, single-image rendering.</span>
+        <span class="c1"># It shows how quaternions/scales could be unpacked to compute normals from the smallest axis:</span>
+        <span class="c1">#</span>
         <span class="c1"># if packed:</span>
-        <span class="c1">#     quats = quats.view(B, N, 4)[batch_ids, gaussian_ids]   # [nnz, 4]</span>
-        <span class="c1">#     scales = scales.view(B, N, 3)[batch_ids, gaussian_ids] # [nnz, 3]</span>
-        <span class="c1">#     means = means.view(B, N, 3)[batch_ids, gaussian_ids]   # [nnz, 3]</span>
-        <span class="c1"># # Normalize quaternion &amp; get rotation matrix</span>
+        <span class="c1">#     quats = quats.view(B, N, 4)[batch_ids, gaussian_ids]</span>
+        <span class="c1">#     scales = scales.view(B, N, 3)[batch_ids, gaussian_ids]</span>
+        <span class="c1">#     means = means.view(B, N, 3)[batch_ids, gaussian_ids]</span>
         <span class="c1"># quats_crop = quats / quats.norm(dim=-1, keepdim=True)</span>
         <span class="c1"># rots = normalized_quat_to_rotmat(quats_crop)</span>
-        <span class="c1"># # Compute normal = min-scale axis</span>
         <span class="c1"># min_idx = torch.argmin(scales, dim=-1)</span>
         <span class="c1"># normals = rots[torch.arange(rots.shape[0]), :, min_idx]</span>
-        <span class="c1"># # Flip toward camera</span>
         <span class="c1"># c2w = torch.inverse(viewmats)</span>
         <span class="c1"># c2w_R = c2w[..., :3, :3]</span>
         <span class="c1"># c2w_t = c2w[..., :3, 3]</span>
@@ -951,9 +950,8 @@
         <span class="c1"># viewdirs = viewdirs / (viewdirs.norm(dim=-1, keepdim=True) + 1e-8)</span>
         <span class="c1"># normals = normals[None, :, :].expand(C, -1, -1).clone()</span>
         <span class="c1"># dot = (normals * viewdirs).sum(-1, keepdim=True)</span>
-        <span class="c1"># flip = torch.where(dot &lt; 0, -1.0, 1.0) # safe</span>
+        <span class="c1"># flip = torch.where(dot &lt; 0, -1.0, 1.0)</span>
         <span class="c1"># normals = normals * flip</span>
-        <span class="c1"># # Transform to camera space</span>
         <span class="c1"># normals = normals @ c2w_R</span>
         <span class="c1"># print(f&quot;[Debug] depths shape:{depths.shape}&quot;)</span>
         <span class="c1"># print(f&quot;[Debug] normals shape:{normals.shape}&quot;)</span>
@@ -1152,7 +1150,7 @@
     <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED+N&quot;</span><span class="p">]:</span>
         <span class="c1"># normalize the accumulated depth to get the expected depth</span>
         <span class="k">if</span> <span class="n">render_mode</span> <span class="o">==</span> <span class="s2">&quot;RGB+ED+N&quot;</span><span class="p">:</span>
-            <span class="c1"># 对于RGB+ED+N模式，深度通道是第4个通道（索引-4到-3）</span>
+            <span class="c1"># In RGB+ED+N mode the depth channel is the 4th entry (slice -4:-3)</span>
             <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">:</span><span class="o">-</span><span class="mi">3</span><span class="p">]</span> <span class="o">/=</span> <span class="n">render_alphas</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mf">1e-10</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>

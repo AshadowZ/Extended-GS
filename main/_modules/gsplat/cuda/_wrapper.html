@@ -911,7 +911,7 @@
 <span class="sd">        - **Rendered colors**. [..., image_height, image_width, channels]</span>
 <span class="sd">        - **Rendered alphas**. [..., image_height, image_width, 1]</span>
 <span class="sd">        - **Rendered median depth**. [..., image_height, image_width, 1]</span>
-<span class="sd">        - **Pixel-to-Gaussian pairs**. [K, 2] with `(gaussian_id, pixel_id)`；若 `track_pixel_gaussians=False` 则返回空 tensor。</span>
+<span class="sd">        - **Pixel-to-Gaussian pairs**. [K, 2] with `(gaussian_id, pixel_id)`; returns an empty tensor if `track_pixel_gaussians=False`.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">image_dims</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
