@@ -55,7 +55,6 @@ def test_strategy():
     strategy.step_post_backward(params, optimizers, state, step=600, info=info)
 
 
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_strategy_requires_grad():
     from gsplat.rendering import rasterization

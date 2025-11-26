@@ -141,9 +141,7 @@ class Config:
     budget: Optional[int] = None
 
     # Strategy instance (constructed from the type/params above)
-    strategy: Union[DefaultStrategy, ImprovedStrategy] = field(
-        init=False, repr=False
-    )
+    strategy: Union[DefaultStrategy, ImprovedStrategy] = field(init=False, repr=False)
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
@@ -177,7 +175,7 @@ class Config:
     """ Iteration to end Natural Selection """
     reg_end: int = 23_000
     """ Base regularization strength during Natural Selection (will be adjusted dynamically) """
-    opacity_reg_weight: float = 2e-5 
+    opacity_reg_weight: float = 2e-5
     """ Interval for Natural Selection reg updates """
     reg_interval: int = 50
     """ Final target Gaussian count (budget) """
@@ -856,9 +854,7 @@ class Runner:
                         indexing="ij",
                     )
                     cached_grid_xy = (
-                        torch.stack([grid_x, grid_y], dim=-1)
-                        .unsqueeze(0)
-                        .detach()
+                        torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).detach()
                     )
                 batch_grid_xy = cached_grid_xy.expand(colors.shape[0], -1, -1, -1)
                 colors = slice(
@@ -961,7 +957,10 @@ class Runner:
                 loss += cfg.flat_reg_weight * self.compute_flat_loss()
             # We follow the original SplatFacto implementation here and only apply this loss every 10 steps
             if cfg.scale_reg_weight > 0.0 and step % 10 == 0:
-                loss += cfg.scale_reg_weight * self.compute_scale_regularisation_loss_median()
+                loss += (
+                    cfg.scale_reg_weight
+                    * self.compute_scale_regularisation_loss_median()
+                )
 
             # [GNS] Regularization Loss & Early Stop Handling
             strategy_gns_finished = getattr(self.cfg.strategy, "gns_finished", True)
@@ -993,11 +992,14 @@ class Runner:
                             if self.gns_start_count < cfg.final_budget:
                                 self.gns_start_count = cfg.final_budget + 1000
 
-                        progress = (step - cfg.reg_start) / (cfg.reg_end - cfg.reg_start)
+                        progress = (step - cfg.reg_start) / (
+                            cfg.reg_end - cfg.reg_start
+                        )
                         progress = max(0.0, min(1.0, progress))
-                        expected_count = self.gns_start_count - (
-                            self.gns_start_count - cfg.final_budget
-                        ) * progress
+                        expected_count = (
+                            self.gns_start_count
+                            - (self.gns_start_count - cfg.final_budget) * progress
+                        )
                         current_count = len(self.splats["means"])
 
                         if current_count > expected_count * 1.05:
@@ -1005,7 +1007,9 @@ class Runner:
                         elif current_count < expected_count * 0.95:
                             cfg.opacity_reg_weight = cfg.opacity_reg_weight * 0.8
 
-                        cfg.opacity_reg_weight = max(1e-7, min(cfg.opacity_reg_weight, 1e-2))
+                        cfg.opacity_reg_weight = max(
+                            1e-7, min(cfg.opacity_reg_weight, 1e-2)
+                        )
 
                         # if self.cfg.strategy_verbose:
                         #     print(
@@ -1032,7 +1036,11 @@ class Runner:
                     #         f"loss contribution={gns_loss.item():.6e}"
                     #     )
 
-            if cfg.enable_natural_selection and step == cfg.reg_end and ns_stop_step is None:
+            if (
+                cfg.enable_natural_selection
+                and step == cfg.reg_end
+                and ns_stop_step is None
+            ):
                 ns_stop_step = step
 
             if ns_stop_step is not None and step == ns_stop_step + 1000:

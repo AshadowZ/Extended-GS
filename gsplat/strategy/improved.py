@@ -230,21 +230,23 @@ class ImprovedStrategy(Strategy):
             # 2. Final budget prune that enforces the probabilistic cap at the end
             if step == self.reg_end:
                 if self.verbose:
-                    print(f"[GNS] Step {step}: Running Final Budget Prune to {self.final_budget}...")
-                
+                    print(
+                        f"[GNS] Step {step}: Running Final Budget Prune to {self.final_budget}..."
+                    )
+
                 n_pruned = self._final_prune_gs(
-                    params=params, 
-                    optimizers=optimizers, 
-                    state=state, 
-                    target_budget=self.final_budget
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    target_budget=self.final_budget,
                 )
-                
+
                 if self.verbose:
                     print(
                         f"[GNS] Final Prune removed {n_pruned} gaussians. "
                         f"Now having {len(params['means'])} GSs."
                     )
-                
+
                 # Clean up memory after large-scale pruning
                 torch.cuda.empty_cache()
                 self.gns_finished = True
@@ -283,7 +285,7 @@ class ImprovedStrategy(Strategy):
             state["count"].zero_()
             if self.refine_scale2d_stop_iter > 0:
                 state["radii"].zero_()
-            torch.cuda.empty_cache() # it is useful
+            torch.cuda.empty_cache()  # it is useful
 
         if step % self.reset_every == 0 and step > 0:
             reset_opa(
@@ -500,7 +502,7 @@ class ImprovedStrategy(Strategy):
             remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
 
         return n_prune
-    
+
     @torch.no_grad()
     def _opacity_prune_gs(
         self,
@@ -529,7 +531,7 @@ class ImprovedStrategy(Strategy):
             remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
 
         return n_prune
-    
+
     @torch.no_grad()
     def _final_prune_gs(
         self,
