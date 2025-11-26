@@ -30,7 +30,7 @@ from utils import (
     rgb_to_sh,
     set_random_seed,
 )
-from utils_depth import get_implied_normal_from_depth
+from utils import get_implied_normal_from_depth
 from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
 from gsplat.strategy import DefaultStrategy, ImprovedStrategy

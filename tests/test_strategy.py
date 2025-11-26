@@ -15,7 +15,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_strategy():
     from gsplat.rendering import rasterization
-    from gsplat.strategy import DefaultStrategy, MCMCStrategy
+    from gsplat.strategy import DefaultStrategy
 
     torch.manual_seed(42)
 
@@ -54,18 +54,11 @@ def test_strategy():
     render_colors.mean().backward(retain_graph=True)
     strategy.step_post_backward(params, optimizers, state, step=600, info=info)
 
-    # Test MCMCStrategy
-    strategy = MCMCStrategy(verbose=True)
-    strategy.check_sanity(params, optimizers)
-    state = strategy.initialize_state()
-    render_colors.mean().backward(retain_graph=True)
-    strategy.step_post_backward(params, optimizers, state, step=600, info=info, lr=1e-3)
-
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_strategy_requires_grad():
     from gsplat.rendering import rasterization
-    from gsplat.strategy import DefaultStrategy, MCMCStrategy
+    from gsplat.strategy import DefaultStrategy
 
     def assert_consistent_sizes(params):
         sizes = [v.shape[0] for v in params.values()]
@@ -110,22 +103,12 @@ def test_strategy_requires_grad():
     strategy.check_sanity(params, optimizers)
     state = strategy.initialize_state()
     strategy.step_pre_backward(params, optimizers, state, step=600, info=info)
-    render_colors.mean().backward(retain_graph=True)
     strategy.step_post_backward(params, optimizers, state, step=600, info=info)
     for k, v in params.items():
         assert v.requires_grad == requires_grad_map[k]
     assert params["non_trainable_features"].grad is None
     assert_consistent_sizes(params)
-    # Test MCMCStrategy
-    strategy = MCMCStrategy(verbose=True)
-    strategy.check_sanity(params, optimizers)
-    state = strategy.initialize_state()
     render_colors.mean().backward(retain_graph=True)
-    strategy.step_post_backward(params, optimizers, state, step=600, info=info, lr=1e-3)
-    assert params["non_trainable_features"].grad is None
-    for k, v in params.items():
-        assert v.requires_grad == requires_grad_map[k]
-    assert_consistent_sizes(params)
 
 
 if __name__ == "__main__":

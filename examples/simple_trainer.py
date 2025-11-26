@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import imageio
 import numpy as np
@@ -35,7 +35,7 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
-from gsplat.strategy import DefaultStrategy, MCMCStrategy
+from gsplat.strategy import DefaultStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
@@ -112,9 +112,7 @@ class Config:
     far_plane: float = 1e10
 
     # Strategy for GS densification
-    strategy: Union[DefaultStrategy, MCMCStrategy] = field(
-        default_factory=DefaultStrategy
-    )
+    strategy: DefaultStrategy = field(default_factory=DefaultStrategy)
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
@@ -140,8 +138,6 @@ class Config:
     # LR for higher-order SH (detail)
     shN_lr: float = 2.5e-3 / 20
 
-    # Opacity regularization
-    opacity_reg: float = 0.0
     # Scale regularization
     scale_reg: float = 0.0
 
@@ -196,10 +192,6 @@ class Config:
             strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
             strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
             strategy.reset_every = int(strategy.reset_every * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        elif isinstance(strategy, MCMCStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
             strategy.refine_every = int(strategy.refine_every * factor)
         else:
             assert_never(strategy)
@@ -377,8 +369,6 @@ class Runner:
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
             )
-        elif isinstance(self.cfg.strategy, MCMCStrategy):
-            self.strategy_state = self.cfg.strategy.initialize_state()
         else:
             assert_never(self.cfg.strategy)
 
@@ -521,11 +511,7 @@ class Runner:
             width=width,
             height=height,
             packed=self.cfg.packed,
-            absgrad=(
-                self.cfg.strategy.absgrad
-                if isinstance(self.cfg.strategy, DefaultStrategy)
-                else False
-            ),
+            absgrad=getattr(self.cfg.strategy, "absgrad", False),
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
@@ -683,8 +669,6 @@ class Runner:
                 loss += tvloss
 
             # regularizations
-            if cfg.opacity_reg > 0.0:
-                loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
             if cfg.scale_reg > 0.0:
                 loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
 
@@ -837,15 +821,6 @@ class Runner:
                     step=step,
                     info=info,
                     packed=cfg.packed,
-                )
-            elif isinstance(self.cfg.strategy, MCMCStrategy):
-                self.cfg.strategy.step_post_backward(
-                    params=self.splats,
-                    optimizers=self.optimizers,
-                    state=self.strategy_state,
-                    step=step,
-                    info=info,
-                    lr=schedulers[0].get_last_lr()[0],
                 )
             else:
                 assert_never(self.cfg.strategy)
@@ -1178,16 +1153,6 @@ if __name__ == "__main__":
             "Gaussian splatting training using densification heuristics from the original paper.",
             Config(
                 strategy=DefaultStrategy(verbose=True),
-            ),
-        ),
-        "mcmc": (
-            "Gaussian splatting training using densification from the paper '3D Gaussian Splatting as Markov Chain Monte Carlo'.",
-            Config(
-                init_opa=0.5,
-                init_scale=0.1,
-                opacity_reg=0.01,
-                scale_reg=0.01,
-                strategy=MCMCStrategy(verbose=True),
             ),
         ),
     }

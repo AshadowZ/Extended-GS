@@ -28,7 +28,7 @@ Powered by `gsplat`'s efficient CUDA implementation, the training takes up to
 
 Feature Ablation
 ----------------------------------------------
-Evaluation of features provided in `gsplat` on Mip-NeRF (averaged over 7 scenes). We ablate `gsplat` with default settings, with absgrad and mcmc densification strategies, and antialiased mode.
+Evaluation of features provided in `gsplat` on Mip-NeRF (averaged over 7 scenes). We ablate `gsplat` with default settings, the absgrad densification heuristic, and antialiased mode.
 Absgrad method uses `--grow_grad2d 0.0006` config. These results are obtained with an A100.
 
 +-----------------------------+-------+-------+-------+----------+---------+------------+
@@ -40,15 +40,7 @@ Absgrad method uses `--grow_grad2d 0.0006` config. These results are obtained wi
 +-----------------------------+-------+-------+-------+----------+---------+------------+
 | antialiased                 | 29.03 | 0.87  | 0.14  | 3377807  | 5.87    | 19.52      |
 +-----------------------------+-------+-------+-------+----------+---------+------------+
-| mcmc  (1 mill)              | 29.18 | 0.87  | 0.14  | 1000000  | 1.98    | 15.42      |
-+-----------------------------+-------+-------+-------+----------+---------+------------+
-| mcmc  (2 mill)              | 29.53 | 0.88  | 0.13  | 2000000  | 3.43    | 21.79      |
-+-----------------------------+-------+-------+-------+----------+---------+------------+
-| mcmc  (3 mill)              | 29.65 | 0.89  | 0.12  | 3000000  | 4.99    | 27.63      |
-+-----------------------------+-------+-------+-------+----------+---------+------------+
 | absgrad & antialiased       | 29.14 | 0.88  | 0.13  | 2563156  | 4.57    | 18.43      |
-+-----------------------------+-------+-------+-------+----------+---------+------------+
-| mcmc & antialiased          | 29.23 | 0.87  | 0.14  | 1000000  | 2.00    | 15.75      |
 +-----------------------------+-------+-------+-------+----------+---------+------------+
 
 

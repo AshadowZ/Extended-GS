@@ -12,7 +12,7 @@ from gsplat.rendering import rasterization_2dgs
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
-from utils_depth import get_implied_normal_from_depth
+from utils import get_implied_normal_from_depth
 
 
 def main(local_rank: int, world_rank, world_size: int, args):

@@ -12,13 +12,11 @@ Here are the instructions on how to use this feature.
 
 #### Training
 
-Simplly passing in `--with_ut --with_eval3d` to the `simple_trainer.py` arg list will enable training with 3DGUT! And note in gsplat we only support MCMC densification strategy for 3DGUT:
+Simply passing in `--with_ut --with_eval3d` to the `simple_trainer.py` arg list will enable training with 3DGUT:
 
 ```
-python examples/simple_trainer.py mcmc --with_ut --with_eval3d ... <OTHER ARGS>
+python examples/simple_trainer.py default --with_ut --with_eval3d ... <OTHER ARGS>
 ```
-
-For benchmarking on MipNeRF360 Dataset, please checkout `examples/benchmarks/3dgut/mcmc.sh`
 
 Note if you are not familiar with how to get started with `simple_trainer.py`, please checkout [README.md](README.md) first!
 
@@ -27,12 +25,12 @@ Note if you are not familiar with how to get started with `simple_trainer.py`, p
 Once trained, you could view the 3DGS and play with the distortion effect supported through 3DGUT via our viewer:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python simple_viewer_3dgut.py --ckpt results/benchmark_mcmc_1M_3dgut/garden/ckpt_29999_rank0.pt 
+CUDA_VISIBLE_DEVICES=0 python simple_viewer_3dgut.py --ckpt <RESULT_DIR>/garden/ckpt_29999_rank0.pt 
 ```
 
 Or a more comprehensive nerfstudio-style viewer to export videos. (note changing distortion is not yet supported in this comprehensive viewer!)
 ```bash
-CUDA_VISIBLE_DEVICES=0 python simple_viewer.py --with_ut --with_eval3d --ckpt results/benchmark_mcmc_1M_3dgut/garden/ckpt_29999_rank0.pt 
+CUDA_VISIBLE_DEVICES=0 python simple_viewer.py --with_ut --with_eval3d --ckpt <RESULT_DIR>/garden/ckpt_29999_rank0.pt 
 ```
 
 ### For users using gsplat' API:

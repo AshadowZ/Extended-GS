@@ -29,17 +29,24 @@ from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
-from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+
+from utils import (
+    AppearanceOptModule,
+    CameraOptModule,
+    get_implied_normal_from_depth,
+    knn,
+    rgb_to_sh,
+    set_random_seed,
+)
 
 from gsplat import export_splats
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
-from gsplat.strategy import DefaultStrategy, MCMCStrategy, ImprovedStrategy
+from gsplat.strategy import DefaultStrategy, ImprovedStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
-from utils_depth import get_implied_normal_from_depth
 
 
 @dataclass
@@ -75,9 +82,6 @@ class Config:
 
     # Batch size for training. Learning rates are scaled automatically
     batch_size: int = 1
-    # A global factor to scale the number of training steps
-    steps_scaler: float = 1.0
-
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
@@ -113,12 +117,12 @@ class Config:
     # Far plane clipping distance
     far_plane: float = 1e10
 
-    # Densification strategy selection (default / mcmc / improved)
-    strategy_type: Literal["default", "mcmc", "improved"] = "default"
+    # Densification strategy selection (default / improved)
+    strategy_type: Literal["default", "improved"] = "default"
     # Verbosity for densification logs
     strategy_verbose: bool = True
     # Densification hyper-parameters (see notes below; shared unless marked otherwise)
-    prune_opa: float = 0.05
+    prune_opa: float = 0.005
     grow_grad2d: float = 0.0002
     prune_scale3d: float = 0.08
     prune_scale2d: float = 0.15
@@ -134,16 +138,10 @@ class Config:
     pause_refine_after_reset: int = 0
     revised_opacity: bool = False
     # ImprovedStrategy-only hyper-parameter
-    budget: int = 2_000_000
-    # MCMCStrategy-only hyper-parameters
-    mcmc_cap_max: int = 1_000_000
-    mcmc_noise_lr: float = 5e5
-    mcmc_min_opacity: float = 0.005
+    budget: Optional[int] = None
 
     # Strategy instance (constructed from the type/params above)
-    strategy: Union[DefaultStrategy, MCMCStrategy, ImprovedStrategy] = field(
-        init=False, repr=False
-    )
+    strategy: Union[DefaultStrategy, ImprovedStrategy] = field(init=False, repr=False)
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
@@ -169,20 +167,31 @@ class Config:
     # LR for higher-order SH (detail)
     shN_lr: float = 2.5e-3 / 20
 
-    # Opacity regularization
-    opacity_reg: float = 0.0
+    ### [GNS] Natural Selection Pruning Params
+    """ Whether to enable the Natural Selection pruning phase """
+    enable_natural_selection: bool = True
+    """ Iteration to start Natural Selection (usually post-densification, e.g., after 15000) """
+    reg_start: int = 15_000
+    """ Iteration to end Natural Selection """
+    reg_end: int = 23_000
+    """ Base regularization strength during Natural Selection (will be adjusted dynamically) """
+    opacity_reg_weight: float = 2e-5
+    """ Interval for Natural Selection reg updates """
+    reg_interval: int = 50
+    """ Final target Gaussian count (budget) """
+    final_budget: int = 1000000
 
     ### Scale regularization
     """Weight of the regularisation loss encouraging gaussians to be flat, i.e. set their minimum
     scale to be small"""
-    flat_reg: float = 1.0
+    flat_reg_weight: float = 1.0
     """If scale regularization is enabled, a scale regularization introduced in PhysGauss
     (https://xpandora.github.io/PhysGaussian/) is used for reducing huge spikey gaussians.
     This implementation adapts the PhysGauss loss to use the ratio of max to median scale
     instead of max to min, as implemented in mvsanywhere/regsplatfacto. This modification
     has been found to work better at encouraging Gaussians to be disks.
     """
-    scale_reg: float = 1.0
+    scale_reg_weight: float = 1.0
     """Threshold of ratio of Gaussian's max to median scale before applying regularization
     loss. This is adapted from the PhysGauss paper (there they used ratio of max to min).
     """
@@ -258,32 +267,9 @@ class Config:
     with_eval3d: bool = False
 
     def __post_init__(self):
+        if self.budget is None:
+            self.budget = self.final_budget * 2.5
         self.rebuild_strategy()
-
-    def adjust_steps(self, factor: float):
-        self.eval_steps = [int(i * factor) for i in self.eval_steps]
-        self.save_steps = [int(i * factor) for i in self.save_steps]
-        self.ply_steps = [int(i * factor) for i in self.ply_steps]
-        self.max_steps = int(self.max_steps * factor)
-        self.sh_degree_interval = int(self.sh_degree_interval * factor)
-
-        strategy = self.strategy
-        if isinstance(strategy, DefaultStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.reset_every = int(strategy.reset_every * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        elif isinstance(strategy, MCMCStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        elif isinstance(strategy, ImprovedStrategy):
-            strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
-            strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
-            strategy.reset_every = int(strategy.reset_every * factor)
-            strategy.refine_every = int(strategy.refine_every * factor)
-        else:
-            assert_never(strategy)
 
     def rebuild_strategy(self):
         if self.strategy_type == "default":
@@ -304,16 +290,6 @@ class Config:
                 revised_opacity=self.revised_opacity,
                 verbose=self.strategy_verbose,
             )
-        elif self.strategy_type == "mcmc":
-            self.strategy = MCMCStrategy(
-                cap_max=self.mcmc_cap_max,
-                noise_lr=self.mcmc_noise_lr,
-                refine_start_iter=self.refine_start_iter,
-                refine_stop_iter=self.refine_stop_iter,
-                refine_every=self.refine_every,
-                min_opacity=self.mcmc_min_opacity,
-                verbose=self.strategy_verbose,
-            )
         elif self.strategy_type == "improved":
             self.strategy = ImprovedStrategy(
                 prune_opa=self.prune_opa,
@@ -328,6 +304,11 @@ class Config:
                 absgrad=self.absgrad,
                 verbose=self.strategy_verbose,
                 budget=self.budget,
+                enable_natural_selection=self.enable_natural_selection,
+                reg_start=self.reg_start,
+                reg_end=self.reg_end,
+                reg_interval=self.reg_interval,
+                final_budget=self.final_budget,
             )
         else:
             assert_never(self.strategy_type)
@@ -419,6 +400,7 @@ def create_splats_with_optimizers(
             eps=1e-15 / math.sqrt(BS),
             # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
+            fused=True,
         )
         for name, _, lr in params
     }
@@ -507,8 +489,6 @@ class Runner:
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
             )
-        elif isinstance(self.cfg.strategy, MCMCStrategy):
-            self.strategy_state = self.cfg.strategy.initialize_state()
         elif isinstance(self.cfg.strategy, ImprovedStrategy):
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
@@ -685,6 +665,7 @@ class Runner:
 
         max_steps = cfg.max_steps
         init_step = 0
+        ns_stop_step: Optional[int] = None
 
         schedulers = [
             # means has a learning rate schedule, that end at 0.01 of the initial value
@@ -728,6 +709,9 @@ class Runner:
 
         # Training loop.
         global_tic = time.time()
+        cached_grid_xy = None
+        cached_h, cached_w = -1, -1
+
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
@@ -862,15 +846,20 @@ class Runner:
                 colors, depths, render_normals = renders, None, None
 
             if cfg.use_bilateral_grid:
-                grid_y, grid_x = torch.meshgrid(
-                    (torch.arange(height, device=self.device) + 0.5) / height,
-                    (torch.arange(width, device=self.device) + 0.5) / width,
-                    indexing="ij",
-                )
-                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+                if cached_grid_xy is None or cached_h != height or cached_w != width:
+                    cached_h, cached_w = height, width
+                    grid_y, grid_x = torch.meshgrid(
+                        (torch.arange(height, device=self.device) + 0.5) / height,
+                        (torch.arange(width, device=self.device) + 0.5) / width,
+                        indexing="ij",
+                    )
+                    cached_grid_xy = (
+                        torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).detach()
+                    )
+                batch_grid_xy = cached_grid_xy.expand(colors.shape[0], -1, -1, -1)
                 colors = slice(
                     self.bil_grids,
-                    grid_xy.expand(colors.shape[0], -1, -1, -1),
+                    batch_grid_xy,
                     colors,
                     image_ids.unsqueeze(-1),
                 )["rgb"]
@@ -878,6 +867,14 @@ class Runner:
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
+
+            # [GNS] Opacity Learning Rate Scaling
+            if cfg.enable_natural_selection and step == cfg.reg_start:
+                print(
+                    f"[GNS] Starting Natural Selection: Scaling Opacity LR by 4x at step {step}"
+                )
+                for param_group in self.optimizers["opacities"].param_groups:
+                    param_group["lr"] *= 4.0
 
             self.cfg.strategy.step_pre_backward(
                 params=self.splats,
@@ -887,14 +884,17 @@ class Runner:
                 info=info,
             )
 
-            # loss
+            # color loss
             l1loss = F.l1_loss(colors, pixels)
             ssimloss = 1.0 - fused_ssim(
                 colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            # tv loss
             if cfg.use_bilateral_grid:
-                tvloss = 10 * total_variation_loss(self.bil_grids.grids)
+                unique_grid_ids = torch.unique(image_ids)
+                active_grids = self.bil_grids.grids[unique_grid_ids]
+                tvloss = 10 * total_variation_loss(active_grids)
                 loss += tvloss
 
             # depth loss
@@ -911,7 +911,7 @@ class Runner:
             if (need_consistency_normal or need_normal_prior) and depths is not None:
                 surf_normals_from_depth = get_implied_normal_from_depth(depths, Ks)
 
-            # consistency normal loss
+            # normal consistency loss
             if (
                 need_consistency_normal
                 and surf_normals_from_depth is not None
@@ -925,13 +925,13 @@ class Runner:
                 )
                 loss += cfg.consistency_normal_loss_weight * consistency_norm_loss
 
-            # normal loss
+            # normal prior loss
             if need_normal_prior and surf_normals_from_depth is not None:
                 mask = torch.ones_like(depths).float()  # [B,H,W,1]
                 if normal_prior_mask is not None:
                     mask = mask * normal_prior_mask
 
-                # Surface normal loss (from depth)
+                # surface normal loss (from depth)
                 if (
                     cfg.surf_normal_loss_weight > 0
                     and step >= cfg.surf_normal_loss_activation_step
@@ -941,7 +941,7 @@ class Runner:
                     )
                     loss += cfg.surf_normal_loss_weight * surf_normal_loss
 
-                # Rendered normal loss
+                # rendered normal loss
                 if (
                     cfg.render_normal_loss_weight > 0
                     and step >= cfg.render_normal_loss_activation_step
@@ -952,16 +952,104 @@ class Runner:
                     )
                     loss += cfg.render_normal_loss_weight * render_normal_loss
 
-            # regularizations
-            if cfg.opacity_reg > 0.0:
-                loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
-
-            # the smallest scale is always near 0
-            if cfg.flat_reg > 0.0:
-                loss += cfg.flat_reg * self.compute_flat_loss()
+            # regularizations the smallest scale is always near 0
+            if cfg.flat_reg_weight > 0.0:
+                loss += cfg.flat_reg_weight * self.compute_flat_loss()
             # We follow the original SplatFacto implementation here and only apply this loss every 10 steps
-            if cfg.scale_reg > 0.0 and step % 10 == 0:
-                loss += cfg.scale_reg * self.compute_scale_regularisation_loss_median()
+            if cfg.scale_reg_weight > 0.0 and step % 10 == 0:
+                loss += (
+                    cfg.scale_reg_weight
+                    * self.compute_scale_regularisation_loss_median()
+                )
+
+            # [GNS] Regularization Loss & Early Stop Handling
+            strategy_gns_finished = getattr(self.cfg.strategy, "gns_finished", True)
+            if (
+                cfg.enable_natural_selection
+                and cfg.reg_end >= step >= cfg.reg_start
+                and not strategy_gns_finished
+            ):
+                current_gs_count = len(self.splats["means"])
+                if step > cfg.reg_start and current_gs_count < cfg.final_budget * 1.05:
+                    print(
+                        f"[GNS] Count {current_gs_count} < 1.05 * Budget. "
+                        f"Stopping Natural Selection early at step {step}."
+                    )
+                    if hasattr(self.cfg.strategy, "force_stop_natural_selection"):
+                        self.cfg.strategy.force_stop_natural_selection(
+                            self.splats,
+                            self.optimizers,
+                            self.strategy_state,
+                            cfg.final_budget,
+                        )
+                    ns_stop_step = step
+                elif (step - 1) % cfg.reg_interval == 0:
+                    opacities_logits = self.splats["opacities"].flatten()
+
+                    if (step - 1) % 100 == 0:
+                        if not hasattr(self, "gns_start_count"):
+                            self.gns_start_count = len(self.splats["means"])
+                            if self.gns_start_count < cfg.final_budget:
+                                self.gns_start_count = cfg.final_budget + 1000
+
+                        progress = (step - cfg.reg_start) / (
+                            cfg.reg_end - cfg.reg_start
+                        )
+                        progress = max(0.0, min(1.0, progress))
+                        expected_count = (
+                            self.gns_start_count
+                            - (self.gns_start_count - cfg.final_budget) * progress
+                        )
+                        current_count = len(self.splats["means"])
+
+                        if current_count > expected_count * 1.05:
+                            cfg.opacity_reg_weight = cfg.opacity_reg_weight * 1.2
+                        elif current_count < expected_count * 0.95:
+                            cfg.opacity_reg_weight = cfg.opacity_reg_weight * 0.8
+
+                        cfg.opacity_reg_weight = max(
+                            1e-7, min(cfg.opacity_reg_weight, 1e-2)
+                        )
+
+                        # if self.cfg.strategy_verbose:
+                        #     print(
+                        #         f"[GNS] Step {step}: Count={current_count}, "
+                        #         f"Target={int(expected_count)}, LR={cfg.opacity_reg_weight:.2e}"
+                        #     )
+
+                    if step < cfg.reg_start + 1000:
+                        current_opacities = torch.sigmoid(opacities_logits)
+                        rate_l = torch.max(
+                            torch.ones_like(current_opacities) * 0.05,
+                            1 - current_opacities,
+                        )
+                        term = (opacities_logits + 20) / rate_l
+                        gns_loss = cfg.opacity_reg_weight * (torch.mean(term) ** 2)
+                    else:
+                        mean_val = torch.mean(opacities_logits)
+                        gns_loss = 3 * cfg.opacity_reg_weight * ((mean_val + 20) ** 2)
+
+                    loss += gns_loss
+                    # if self.cfg.strategy_verbose:
+                    #     print(
+                    #         f"[GNS] Step {step}: opacity_reg_weight={cfg.opacity_reg_weight:.6e}, "
+                    #         f"loss contribution={gns_loss.item():.6e}"
+                    #     )
+
+            if (
+                cfg.enable_natural_selection
+                and step == cfg.reg_end
+                and ns_stop_step is None
+            ):
+                ns_stop_step = step
+
+            if ns_stop_step is not None and step == ns_stop_step + 1000:
+                print(
+                    f"[GNS] Restoring Opacity LR (1000 steps after stop) at step {step}"
+                )
+                for param_group in self.optimizers["opacities"].param_groups:
+                    param_group["lr"] /= 4.0
+                ns_stop_step = None
 
             loss.backward()
 
@@ -1119,16 +1207,16 @@ class Runner:
             # Implementation of gradient accumulation trick from:
             # "Improving Densification in 3D Gaussian Splatting for High-Fidelity Rendering"
             # https://arxiv.org/abs/2508.12313v1
-            if step <= 15000:
-                # Every step update for first 15000 iterations
+            if step <= 20000:
+                # Every step update for first 20000 iterations
                 for optimizer in self.optimizers.values():
                     if cfg.visible_adam:
                         optimizer.step(visibility_mask)
                     else:
                         optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
-            elif step <= 22500:
-                # Accumulate 5 steps, update every 5 steps for 15000-22500 iterations
+            elif step <= 24000:
+                # Accumulate 5 steps, update every 5 steps for 20000-24000 iterations
                 if step % 5 == 0:
                     for optimizer in self.optimizers.values():
                         if cfg.visible_adam:
@@ -1137,7 +1225,7 @@ class Runner:
                             optimizer.step()
                         optimizer.zero_grad(set_to_none=True)
             else:
-                # Accumulate 20 steps, update every 20 steps after 22500 iterations
+                # Accumulate 20 steps, update every 20 steps after 24000 iterations
                 if step % 20 == 0:
                     for optimizer in self.optimizers.values():
                         if cfg.visible_adam:
@@ -1167,15 +1255,6 @@ class Runner:
                     step=step,
                     info=info,
                     packed=cfg.packed,
-                )
-            elif isinstance(self.cfg.strategy, MCMCStrategy):
-                self.cfg.strategy.step_post_backward(
-                    params=self.splats,
-                    optimizers=self.optimizers,
-                    state=self.strategy_state,
-                    step=step,
-                    info=info,
-                    lr=schedulers[0].get_last_lr()[0],
                 )
             else:
                 assert_never(self.cfg.strategy)
@@ -1664,7 +1743,6 @@ if __name__ == "__main__":
 
     cfg = tyro.cli(Config)
     cfg.rebuild_strategy()
-    cfg.adjust_steps(cfg.steps_scaler)
 
     # Import BilateralGrid and related functions based on configuration
     if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:

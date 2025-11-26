@@ -27,7 +27,7 @@ faster, more memory efficient, and with a growing list of new features!
 * *gsplat* is equipped with the **latest and greatest** 3D Gaussian Splatting techniques, 
   including `absgrad <https://ty424.github.io/AbsGS.github.io/>`_, 
   `anti-aliasing <https://niujinshuchong.github.io/mip-splatting/>`_,
-  `3DGS-MCMC <https://ubc-vision.github.io/3dgs-mcmc/>`_ etc. And more to come!
+  and improved densification heuristics. And more to come!
 
 
 .. raw:: html
