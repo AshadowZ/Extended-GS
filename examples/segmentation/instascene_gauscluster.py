@@ -104,7 +104,7 @@ def compute_mask_visible_frame(
     global_gaussian_in_mask_matrix, gaussian_in_frame_matrix, threshold=0.0
 ):
     """Use sparse matrix multiplication to determine mask visibility per frame."""
-    print("[Mask Visibility] 使用稀疏矩阵计算 mask 可见帧 ...")
+    print("[Mask Visibility] Computing mask visibility with sparse matrices ...")
     A = global_gaussian_in_mask_matrix.astype(np.float32)
     if not isinstance(A, csr_matrix):
         A = csr_matrix(A, dtype=np.float32)
@@ -128,7 +128,7 @@ def compute_mask_visible_frame(
         ),
         shape=(A.shape[1], B.shape[1]),
     )
-    print("[Mask Visibility] 计算完成。")
+    print("[Mask Visibility] Completed.")
     return result.toarray()
 
 
@@ -244,7 +244,7 @@ def iterative_clustering(nodes, observer_num_thresholds, connect_threshold):
     iterator = tqdm(
         enumerate(observer_num_thresholds),
         total=len(observer_num_thresholds),
-        desc="迭代聚类",
+        desc="Iterative clustering",
     )
     for iterate_id, observer_num_threshold in iterator:
         graph = update_graph(nodes, observer_num_threshold, connect_threshold)
@@ -301,7 +301,7 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     undersegment_mask_ids = []
 
     for mask_cnts, (frame_id, mask_id) in enumerate(
-        tqdm(global_frame_mask_list, desc="过滤欠分割 Mask")
+        tqdm(global_frame_mask_list, desc="Filter under-segmented masks")
     ):
         valid, contained_mask, visible_frame = judge_single_mask(
             gaussian_in_frame_maskid_matrix,
@@ -330,12 +330,12 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     contained_masks_sparse.sort_indices()
     visible_frames_sparse.sort_indices()
 
-    print("[Perf] 开始计算共现矩阵与观察者阈值 ...")
+    print("[Perf] Starting co-occurrence matrix and observer threshold computation ...")
     threshold_t0 = time.perf_counter()
     observer_num_thresholds = get_observer_num_thresholds(visible_frames_sparse)
-    print(f"[Perf] 共现矩阵/阈值耗时 {time.perf_counter() - threshold_t0:.2f}s")
+    print(f"[Perf] Co-occurrence/threshold computation took {time.perf_counter() - threshold_t0:.2f}s")
 
-    print("[Perf] 开始构建节点列表 ...")
+    print("[Perf] Starting node list construction ...")
     node_t0 = time.perf_counter()
     nodes = []
     for global_mask_id, (frame_id, mask_id) in enumerate(global_frame_mask_list):
@@ -350,7 +350,7 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
         node_info = (0, len(nodes))
         node = Node(mask_list, frame, frame_mask, point_ids, node_info, None)
         nodes.append(node)
-    print(f"[Perf] 构建节点耗时 {time.perf_counter() - node_t0:.2f}s，节点数 {len(nodes)}")
+    print(f"[Perf] Node construction took {time.perf_counter() - node_t0:.2f}s with {len(nodes)} nodes.")
 
     nodes = iterative_clustering(nodes, observer_num_thresholds, connect_threshold=0.9)
 
@@ -385,7 +385,7 @@ def dbscan_process(
 ):
     points_np = np.asarray(pcld.points)
     if use_gpu and not HAS_CUML:
-        raise RuntimeError("cuML 未安装，无法使用 GPU DBSCAN。")
+        raise RuntimeError("cuML is not installed; GPU DBSCAN cannot be used.")
     if use_gpu and points_np.shape[0] >= min_points and points_np.size > 0:
         labels = _gpu_dbscan(points_np, eps, min_points)
     else:
@@ -520,7 +520,7 @@ def post_process_clusters(
     total_point_ids_list, total_bbox_list, total_mask_list = [], [], []
     scene_points = point_positions.cpu().numpy()
 
-    iterator = tqdm(nodes, total=len(nodes), desc="DBScan+点过滤")
+    iterator = tqdm(nodes, total=len(nodes), desc="DBScan+point filtering")
     for node in iterator:
         if len(node.mask_list) < 2:
             continue
@@ -570,7 +570,7 @@ def remedy_undersegment(
     tracker: Dict,
     threshold: float = 0.8,
 ) -> Dict:
-    """尝试将欠分割的 mask 分配到最匹配的实例中。"""
+    """Assign under-segmented masks to the most compatible instances."""
     undersegment_frame_masks = [
         tracker["global_frame_mask_list"][fid]
         for fid in tracker["undersegment_mask_ids"]
@@ -595,7 +595,7 @@ def remedy_undersegment(
         for idx, frame_mask in enumerate(tracker["global_frame_mask_list"])
     }
 
-    for frame_mask in tqdm(undersegment_frame_masks, desc="修补欠分割 mask"):
+    for frame_mask in tqdm(undersegment_frame_masks, desc="Fix under-segmented masks"):
         frame_id, mask_id = frame_mask
         frame_mask_gaussian = tracker["mask_gaussian_pclds"][f"{frame_id}_{mask_id}"]
         if len(frame_mask_gaussian) == 0:
@@ -639,11 +639,11 @@ def export_color_cluster(
     knn_k: int = 1,
     knn_filename: str = "color_cluster_knn.ply",
 ):
-    """导出彩色实例点云，可选地通过 KNN 为未分类点赋予实例颜色。"""
+    """Export colored instance point clouds and optionally color unlabeled points with KNN."""
     os.makedirs(save_dir, exist_ok=True)
     total_point_ids_list = tracker.get("total_point_ids_list", [])
     if len(total_point_ids_list) == 0:
-        print("[Export] total_point_ids_list 为空，跳过导出。")
+        print("[Export] total_point_ids_list is empty, skip export.")
         return
 
     xyz = point_positions.cpu().numpy()
@@ -662,10 +662,10 @@ def export_color_cluster(
     pcld.colors = o3d.utility.Vector3dVector(colors)
     save_path = save_dir / filename
     o3d.io.write_point_cloud(str(save_path), pcld)
-    print(f"[Export] 已保存彩色实例点云到 {save_path}")
+    print(f"[Export] Saved colored instance point cloud to {save_path}")
     label_path = save_dir / "instance_labels.npy"
     np.save(label_path, inst_labels.copy())
-    print(f"[Export] 已保存实例标签到 {label_path}")
+    print(f"[Export] Saved instance labels to {label_path}")
 
     if not assign_unlabeled_knn:
         return
@@ -673,10 +673,10 @@ def export_color_cluster(
     unlabeled_mask = inst_labels < 0
     assigned_mask = ~unlabeled_mask
     if not np.any(unlabeled_mask):
-        print("[Export] 所有点已有实例颜色，跳过 KNN 重新着色。")
+        print("[Export] All points already have instance colors; skipping KNN recoloring.")
         return
     if not np.any(assigned_mask):
-        print("[Export] 未找到可供 KNN 参考的实例点，跳过。")
+        print("[Export] No reference instance points available for KNN; skipping.")
         return
 
     k = max(1, min(knn_k, int(np.sum(assigned_mask))))
@@ -707,10 +707,10 @@ def export_color_cluster(
     pcld_knn.colors = o3d.utility.Vector3dVector(colors_knn)
     knn_path = save_dir / knn_filename
     o3d.io.write_point_cloud(str(knn_path), pcld_knn)
-    print(f"[Export] 已保存 KNN 填充彩色点云到 {knn_path}")
+    print(f"[Export] Saved KNN-filled colored point cloud to {knn_path}")
     knn_label_path = save_dir / "instance_labels_knn.npy"
     np.save(knn_label_path, inst_labels.copy())
-    print(f"[Export] 已保存 KNN 标签到 {knn_label_path}")
+    print(f"[Export] Saved KNN labels to {knn_label_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -850,7 +850,7 @@ def collect_view_data(
     image_hw_cache: Dict[str, Tuple[int, int]] = {}
     indices = dataset.indices
 
-    pbar = tqdm(range(len(indices)), desc="[Cameras] 准备视角", total=len(indices))
+    pbar = tqdm(range(len(indices)), desc="[Cameras] Preparing views", total=len(indices))
     for local_idx in pbar:
         parser_idx = indices[local_idx]
         image_path = parser.image_paths[parser_idx]
@@ -882,8 +882,8 @@ def collect_view_data(
                 height, width = actual_h, actual_w
             else:
                 raise ValueError(
-                    f"Mask 尺寸 {mask_h}x{mask_w} 与相机解析到的尺寸 {height}x{width} "
-                    f"以及原始图像尺寸 {actual_h}x{actual_w} 均不一致：{mask_path}"
+                    f"Mask size {mask_h}x{mask_w} does not match the camera resolution {height}x{width} "
+                    f"or the original image size {actual_h}x{actual_w}: {mask_path}"
                 )
         view_entry = {
             "index": int(parser_idx),
@@ -906,7 +906,7 @@ def build_mask_gaussian_tracker(
     view_data: List[Dict[str, torch.Tensor]],
     device: torch.device,
 ) -> Dict:
-    """构建 mask -> Gaussian 跟踪：为每帧的每个 mask 找到对应的高斯点 id 列表。"""
+    """Build mask-to-Gaussian tracking by finding Gaussian ids per mask per frame."""
     means, quats, scales, opacities, colors, sh_degree = gaussians
     num_points = means.shape[0]
     num_frames = len(view_data)
@@ -922,7 +922,7 @@ def build_mask_gaussian_tracker(
     opacities_d = opacities.to(device)
     colors_d = colors.to(device)
 
-    pbar = tqdm(view_data, desc="构建 mask→Gaussian 跟踪", total=num_frames)
+    pbar = tqdm(view_data, desc="Build mask→Gaussian tracking", total=num_frames)
     for frame_idx, view in enumerate(pbar):
         width, height = view["width"], view["height"]
         viewmats = torch.linalg.inv(view["camtoworld"].to(device)).unsqueeze(0)
@@ -953,7 +953,7 @@ def build_mask_gaussian_tracker(
 
         pixel_gaussians = meta.get("pixel_gaussians", None)
         if pixel_gaussians is None or pixel_gaussians.numel() == 0:
-            raise RuntimeError(f"未在视角 {view['image_name']} 获取到像素-高斯对应关系。")
+            raise RuntimeError(f"Pixel-to-Gaussian correspondences missing for view {view['image_name']}.")
 
         gaus_ids = pixel_gaussians[:, 0].long()
         pixel_ids = pixel_gaussians[:, 1].long()
@@ -1025,17 +1025,17 @@ def main():
     print(f"[Summary] Prepared {len(view_data)} camera views with SAM masks.")
 
     means, quats, scales, opacities, colors, sh_degree = gaussians
-    print("\n================ 数据校验 ================")
-    print(f"数据目录: {args.data_dir}")
-    print(f"Mask 目录: {mask_dir}")
-    print(f"相机数量: {len(view_data)}")
-    print(f"高斯数量: {means.shape[0]}")
-    print(f"SH 阶数: {sh_degree}")
+    print("\n================ Data validation ================")
+    print(f"Data directory: {args.data_dir}")
+    print(f"Mask directory: {mask_dir}")
+    print(f"Number of cameras: {len(view_data)}")
+    print(f"Number of Gaussians: {means.shape[0]}")
+    print(f"SH degree: {sh_degree}")
     print("----------------------------------------")
-    print("示例视角：")
+    print("Sample views:")
     for sample in view_data[:3]:
         print(
-            f"  • {sample['image_name']} | 分辨率 {sample['width']}x{sample['height']} | "
+            f"  • {sample['image_name']} | Resolution {sample['width']}x{sample['height']} | "
             f"mask: {sample['mask_path']}"
         )
     print("========================================\n")
@@ -1043,24 +1043,24 @@ def main():
     tracker = build_mask_gaussian_tracker(gaussians, view_data, device=device)
     total_masks = len(tracker["global_frame_mask_list"])
     total_points_hit = tracker["gaussian_in_frame_matrix"].sum()
-    print("============== 跟踪统计（阶段一） ==============")
-    print(f"有效 mask 数量: {total_masks}")
-    print(f"有像素贡献的 Gaussian 总计: {total_points_hit}")
+    print("============== Tracking statistics (Stage 1) ==============")
+    print(f"Valid mask count: {total_masks}")
+    print(f"Total Gaussians with pixel contributions: {total_points_hit}")
     for i, (frame_id, mask_id) in enumerate(tracker["global_frame_mask_list"][:5]):
         gs_ids = tracker["mask_gaussian_pclds"][f"{frame_id}_{mask_id}"]
-        print(f"  • frame {frame_id:03d}, mask {mask_id}: 高斯数 {len(gs_ids)}")
+        print(f"  • frame {frame_id:03d}, mask {mask_id}: Gaussian count {len(gs_ids)}")
     print("=============================================")
 
-    # 阶段二：迭代聚类
-    print("\n开始迭代聚类（阶段二）...")
+    # Stage 2: iterative clustering
+    print("\nStarting iterative clustering (Stage 2)...")
     clustering_result = iterative_cluster_masks(tracker)
-    print("聚类完成。")
-    print(f"实例数（聚类后节点数）: {len(clustering_result['nodes'])}")
+    print("Clustering completed.")
+    print(f"Instance count (post-clustering nodes): {len(clustering_result['nodes'])}")
 
-    # 阶段三：DBSCAN + 点过滤
-    print("\n开始后处理（阶段三：DBSCAN+点过滤）...")
+    # Stage 3: DBSCAN + point filtering
+    print("\nStarting post-processing (Stage 3: DBSCAN + point filtering)...")
     if args.use_gpu_dbscan and not HAS_CUML:
-        raise RuntimeError("检测到 --use_gpu_dbscan 但未安装 cuML，请安装后重试或取消该选项。")
+        raise RuntimeError("Detected --use_gpu_dbscan but cuML is missing; install cuML or remove the flag.")
 
     clustering_result = post_process_clusters(
         clustering_result,
@@ -1071,16 +1071,16 @@ def main():
         overlap_ratio=0.8,
         use_gpu_dbscan=args.use_gpu_dbscan,
     )
-    print("后处理完成。")
-    print(f"实例数（后处理）: {len(clustering_result['total_point_ids_list'])}")
+    print("Post-processing completed.")
+    print(f"Instance count (post-processing): {len(clustering_result['total_point_ids_list'])}")
 
-    # 阶段四：修补欠分割 mask
-    print("\n开始修补欠分割 Mask（阶段四）...")
+    # Stage 4: fix under-segmented masks
+    print("\nStarting under-segmented mask repair (Stage 4)...")
     clustering_result = remedy_undersegment(clustering_result, threshold=0.8)
-    print("修补完成。")
-    print(f"最终实例数: {len(clustering_result['total_point_ids_list'])}")
+    print("Repair completed.")
+    print(f"Final instance count: {len(clustering_result['total_point_ids_list'])}")
 
-    # 导出彩色实例点云
+    # Export colored instance point clouds
     save_dir = Path(args.data_dir) / "cluster_result"
     export_color_cluster(clustering_result, point_positions=means, save_dir=save_dir)
 

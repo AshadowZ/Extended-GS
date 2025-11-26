@@ -206,7 +206,7 @@ def long_axis_split(
     quats = F.normalize(params["quats"][sel], dim=-1)
     rotmats = normalized_quat_to_rotmat(quats)  # [N,3,3]
 
-    # ----------- 找最长轴并生成位移 -----------
+    # ----------- Identify longest axis and generate offsets -----------
     max_values, max_indices = torch.max(scales, dim=1, keepdim=True)
     axis_mask = torch.zeros_like(scales, dtype=torch.bool, device=device).scatter(
         1, max_indices, True
@@ -222,7 +222,7 @@ def long_axis_split(
     x_pair = torch.stack([x_local, -x_local], dim=0)  # [2,N,3]
     samples_world = torch.einsum("nij,bnj->bni", rotmats, x_pair)  # [2,N,3]
 
-    # ----------- 分裂参数逻辑 -----------
+    # ----------- Parameter splitting logic -----------
     def param_fn(name: str, p: Tensor) -> Tensor:
         repeats = [2] + [1] * (p.dim() - 1)
         if name == "means":
@@ -234,7 +234,7 @@ def long_axis_split(
             new_std_child = new_std_parent * rate_h
             p_split = torch.log(new_std_child.repeat(repeats))  # [2N,3]
         elif name == "opacities":
-            # long_axis_split 的透明度逻辑
+            # Opacity adjustment for long-axis splitting
             opacity = torch.sigmoid(p[sel])  # [N,1] or [N]
             reduced = opacity * opacity_reduction
             p_split = torch.logit(reduced.clamp(min=1e-6, max=1.0 - 1e-6)).repeat(
@@ -251,10 +251,10 @@ def long_axis_split(
         v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
         return torch.cat([v[rest], v_split])
 
-    # 更新参数与 optimizer
+    # Update parameters and optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
-    # 更新 state
+    # Update state dictionary
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
             repeats = [2] + [1] * (v.dim() - 1)

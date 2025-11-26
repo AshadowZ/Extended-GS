@@ -626,18 +626,17 @@ def rasterization(
 
     # Rasterize to pixels
     if render_mode == "RGB+ED+N":
-        # # 只适用于单场景单图像渲染
+        # NOTE: The following example code is only valid for single-scene, single-image rendering.
+        # It shows how quaternions/scales could be unpacked to compute normals from the smallest axis:
+        #
         # if packed:
-        #     quats = quats.view(B, N, 4)[batch_ids, gaussian_ids]   # [nnz, 4]
-        #     scales = scales.view(B, N, 3)[batch_ids, gaussian_ids] # [nnz, 3]
-        #     means = means.view(B, N, 3)[batch_ids, gaussian_ids]   # [nnz, 3]
-        # # Normalize quaternion & get rotation matrix
+        #     quats = quats.view(B, N, 4)[batch_ids, gaussian_ids]
+        #     scales = scales.view(B, N, 3)[batch_ids, gaussian_ids]
+        #     means = means.view(B, N, 3)[batch_ids, gaussian_ids]
         # quats_crop = quats / quats.norm(dim=-1, keepdim=True)
         # rots = normalized_quat_to_rotmat(quats_crop)
-        # # Compute normal = min-scale axis
         # min_idx = torch.argmin(scales, dim=-1)
         # normals = rots[torch.arange(rots.shape[0]), :, min_idx]
-        # # Flip toward camera
         # c2w = torch.inverse(viewmats)
         # c2w_R = c2w[..., :3, :3]
         # c2w_t = c2w[..., :3, 3]
@@ -646,9 +645,8 @@ def rasterization(
         # viewdirs = viewdirs / (viewdirs.norm(dim=-1, keepdim=True) + 1e-8)
         # normals = normals[None, :, :].expand(C, -1, -1).clone()
         # dot = (normals * viewdirs).sum(-1, keepdim=True)
-        # flip = torch.where(dot < 0, -1.0, 1.0) # safe
+        # flip = torch.where(dot < 0, -1.0, 1.0)
         # normals = normals * flip
-        # # Transform to camera space
         # normals = normals @ c2w_R
         # print(f"[Debug] depths shape:{depths.shape}")
         # print(f"[Debug] normals shape:{normals.shape}")
@@ -847,7 +845,7 @@ def rasterization(
     if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
         # normalize the accumulated depth to get the expected depth
         if render_mode == "RGB+ED+N":
-            # 对于RGB+ED+N模式，深度通道是第4个通道（索引-4到-3）
+            # In RGB+ED+N mode the depth channel is the 4th entry (slice -4:-3)
             render_colors[..., -4:-3] /= render_alphas.clamp_min(1e-10)
         else:
             render_colors = torch.cat(

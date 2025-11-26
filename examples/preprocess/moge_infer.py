@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import utils3d
 from colmap_util import get_extrinsic, get_hws, get_intrinsics, read_model
-from moge.model.v2 import MoGeModel  # 使用 MoGe-2
+from moge.model.v2 import MoGeModel  # Use MoGe-2
 from sklearn.linear_model import LinearRegression, RANSACRegressor
 from tqdm import tqdm
 
@@ -103,14 +103,14 @@ def run_inference(
     colmap_ransac_trials=2000,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"使用设备: {device}")
+    print(f"Using device: {device}")
 
-    print("正在加载模型...")
+    print("Loading model...")
     model_load_start = time.time()
     model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl-normal").to(device)
     model.eval()
     model_load_time = time.time() - model_load_start
-    print(f"模型加载完成，耗时: {model_load_time:.2f}秒")
+    print(f"Model loaded in {model_load_time:.2f}s")
 
     normal_output_dir = os.path.join(data_dir, "moge_normal")
     os.makedirs(normal_output_dir, exist_ok=True)
@@ -134,13 +134,13 @@ def run_inference(
         if not os.path.exists(resolved_colmap_dir):
             resolved_colmap_dir = os.path.join(data_dir, "sparse")
         if os.path.exists(resolved_colmap_dir):
-            print(f"加载 COLMAP 模型自 {resolved_colmap_dir}")
+            print(f"Loading COLMAP model from {resolved_colmap_dir}")
             colmap_meta, colmap_meta_norm, colmap_points = prepare_colmap_context(
                 resolved_colmap_dir, data_factor=data_factor
             )
-            print(f"COLMAP 对齐准备完成，共 {len(colmap_meta)} 张图像")
+            print(f"COLMAP alignment ready for {len(colmap_meta)} images")
         else:
-            print("[WARN] 未找到 COLMAP 模型目录，depth 对齐将被跳过。")
+            print("[WARN] COLMAP model directory not found; skipping depth alignment.")
             align_depth_with_colmap = False
 
     image_dir = os.path.join(data_dir, image_dir_name)
@@ -150,10 +150,10 @@ def run_inference(
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     )
     if not image_files:
-        print(f"未在 {image_dir} 目录下找到可处理的图像。")
+        print(f"No processable images found in {image_dir}.")
         return
 
-    print(f"找到 {len(image_files)} 张图像")
+    print(f"Found {len(image_files)} images")
     queue_size = max(1, queue_size)
 
     filename_queue = Queue()
@@ -183,7 +183,7 @@ def run_inference(
             if img_bgr is None:
                 read_time = time.time() - read_start
                 data_queue.put((fname, None, read_time))
-                print(f"[WARN] 无法读取图像 {img_path}")
+                print(f"[WARN] Failed to read image {img_path}")
                 filename_queue.task_done()
                 continue
 
@@ -231,7 +231,7 @@ def run_inference(
                     output_path, cv2.cvtColor(normal_uint8, cv2.COLOR_RGB2BGR)
                 )
                 if not success:
-                    print(f"[WARN] 无法写入法向图 {output_path}")
+                    print(f"[WARN] Failed to write normal map {output_path}")
 
             depth_mask_np = mask_np_raw.copy() if mask_np_raw is not None else None
             depth_np = depth_tensor.numpy() if depth_tensor is not None else None
@@ -301,7 +301,7 @@ def run_inference(
                                     )
                                 depth_np = depth_np * coef + intercept
                             except Exception as exc:
-                                print(f"[WARN] COLMAP 对齐失败 {image_name}: {exc}")
+                                print(f"[WARN] COLMAP alignment failed for {image_name}: {exc}")
 
             if depth_np is not None and remove_depth_edge:
                 edge_mask = utils3d.numpy.depth_edge(
@@ -325,7 +325,7 @@ def run_inference(
                 try:
                     np.save(depth_path, depth_to_save.astype(np.float16))
                 except Exception as exc:
-                    print(f"[WARN] 无法写入深度图 {depth_path}: {exc}")
+                    print(f"[WARN] Failed to write depth map {depth_path}: {exc}")
 
             if (
                 save_depth_vis
@@ -370,7 +370,7 @@ def run_inference(
                 vis_path = os.path.join(depth_vis_output_dir, f"{base_name}.png")
                 success = cv2.imwrite(vis_path, depth_color)
                 if not success:
-                    print(f"[WARN] 无法写入深度可视化 {vis_path}")
+                    print(f"[WARN] Failed to write depth visualization {vis_path}")
 
             save_time = time.time() - save_start
             with stats_lock:
@@ -391,7 +391,7 @@ def run_inference(
         t.start()
 
     processed = 0
-    pbar = tqdm(total=len(image_files), desc="MoGe 推理", unit="img")
+    pbar = tqdm(total=len(image_files), desc="MoGe inference", unit="img")
 
     try:
         while processed < len(image_files):
@@ -399,7 +399,7 @@ def run_inference(
             total_read_time += read_time
 
             if img_rgb is None:
-                tqdm.write(f"跳过图像 {fname}（读取失败）")
+                tqdm.write(f"Skipping {fname} (failed to read)")
                 processed += 1
                 pbar.update(1)
                 continue
@@ -451,8 +451,8 @@ def run_inference(
                         else 0.0
                     )
                 tqdm.write(
-                    f"图像 {fname}: 读取 {read_time:.3f}s, 推理 {inference_time:.3f}s, "
-                    f"平均保存 {avg_save:.3f}s"
+                    f"Image {fname}: read {read_time:.3f}s, inference {inference_time:.3f}s, "
+                    f"avg save {avg_save:.3f}s"
                 )
 
     finally:
@@ -472,116 +472,116 @@ def run_inference(
     total_save_time = save_stats["time"]
 
     print("\n" + "=" * 50)
-    print("处理完成！详细耗时统计:")
-    print(f"模型加载耗时: {model_load_time:.2f}秒")
-    print(f"总图像读取耗时: {total_read_time:.2f}秒")
-    print(f"总推理耗时: {total_inference_time:.2f}秒")
-    print(f"总保存耗时: {total_save_time:.2f}秒")
-    print(f"处理图像数量: {len(image_files)}张")
+    print("Processing complete! Detailed timing stats:")
+    print(f"Model load: {model_load_time:.2f}s")
+    print(f"Total image read time: {total_read_time:.2f}s")
+    print(f"Total inference time: {total_inference_time:.2f}s")
+    print(f"Total save time: {total_save_time:.2f}s")
+    print(f"Images processed: {len(image_files)}")
     if len(image_files) > 0:
         total_avg = (total_read_time + total_inference_time + total_save_time) / len(
             image_files
         )
-        print(f"平均每张图像耗时: {total_avg:.2f}秒")
-        print(f"平均推理耗时: {total_inference_time / len(image_files):.2f}秒")
+        print(f"Average per-image time: {total_avg:.2f}s")
+        print(f"Average inference time: {total_inference_time / len(image_files):.2f}s")
         if save_stats["count"]:
-            print(f"平均保存耗时: {total_save_time / save_stats['count']:.2f}秒")
+            print(f"Average save time: {total_save_time / save_stats['count']:.2f}s")
     print("=" * 50)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="多线程运行 MoGe-2 法线推理")
+    parser = argparse.ArgumentParser(description="Multi-threaded MoGe-2 normal inference")
     parser.add_argument(
         "--data_dir",
         type=str,
         required=True,
-        help="包含图像子目录的数据根目录，例如：/path/to/data",
+        help="Data root containing image subdirectories, e.g., /path/to/data",
     )
     parser.add_argument(
         "--image_dir",
         type=str,
         default="images",
-        help="data_dir 下实际存放图像的子目录名称，默认 images",
+        help="Subdirectory under data_dir that stores images (default: images)",
     )
     parser.add_argument(
         "--read_threads",
         type=int,
         default=2,
-        help="并行读取图像的线程数，默认 2",
+        help="Number of threads for parallel image reading (default: 2)",
     )
     parser.add_argument(
         "--write_threads",
         type=int,
         default=5,
-        help="并行写入法向图的线程数，默认 2",
+        help="Number of threads for writing normals (default: 2)",
     )
     parser.add_argument(
         "--queue_size",
         type=int,
         default=8,
-        help="读写缓冲队列长度，默认 8",
+        help="Reader/writer queue capacity (default: 8)",
     )
     parser.add_argument(
         "--save_depth",
         action="store_true",
-        help="保存模型深度输出为 float16 npy（默认不保存）",
+        help="Save model depth outputs as float16 .npy (default: disabled)",
     )
     parser.add_argument(
         "--save_depth_vis",
         action="store_true",
-        help="保存深度可视化 PNG（默认不保存）",
+        help="Save depth visualization PNGs (default: disabled)",
     )
     parser.add_argument(
         "--remove_depth_edge",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="是否剔除深度边缘像素，默认开启，可用 --no-remove_depth_edge 关闭",
+        help="Enable removal of depth edge pixels (default on; disable with --no-remove_depth_edge)",
     )
     parser.add_argument(
         "--depth_edge_rtol",
         type=float,
         default=0.04,
-        help="深度边缘判定的相对阈值 rtol，默认 0.04",
+        help="Relative threshold rtol for edge detection (default: 0.04)",
     )
     parser.add_argument(
         "--align_depth_with_colmap",
         action="store_true",
-        help="使用 COLMAP 稀疏深度对齐网络输出（默认关闭）",
+        help="Align depth with COLMAP sparse depths (default: off)",
     )
     parser.add_argument(
         "--data_factor",
         type=float,
         default=1.0,
-        help="数据图像相对 COLMAP 原图的缩放因子（>1 表示下采样）",
+        help="Scale factor between dataset images and COLMAP originals (>1 means downsampled)",
     )
     parser.add_argument(
         "--colmap_min_sparse",
         type=int,
         default=30,
-        help="执行 RANSAC 深度对齐所需的最少稀疏点数量，默认 30",
+        help="Minimum sparse points needed for RANSAC alignment (default: 30)",
     )
     parser.add_argument(
         "--colmap_clip_low",
         type=float,
         default=5.0,
-        help="稀疏深度下分位裁剪（百分数），默认 5%",
+        help="Lower percentile clip for sparse depth (percent), default 5%",
     )
     parser.add_argument(
         "--colmap_clip_high",
         type=float,
         default=95.0,
-        help="稀疏深度上分位裁剪（百分数），默认 95%",
+        help="Upper percentile clip for sparse depth (percent), default 95%",
     )
     parser.add_argument(
         "--colmap_ransac_trials",
         type=int,
         default=2000,
-        help="RANSAC 最大迭代次数，默认 2000",
+        help="Maximum RANSAC iterations (default: 2000)",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="输出详细的处理耗时和对齐信息",
+        help="Print verbose timing and alignment stats",
     )
     args = parser.parse_args()
 

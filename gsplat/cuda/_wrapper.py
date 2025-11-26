@@ -585,7 +585,7 @@ def rasterize_to_pixels(
         - **Rendered colors**. [..., image_height, image_width, channels]
         - **Rendered alphas**. [..., image_height, image_width, 1]
         - **Rendered median depth**. [..., image_height, image_width, 1]
-        - **Pixel-to-Gaussian pairs**. [K, 2] with `(gaussian_id, pixel_id)`；若 `track_pixel_gaussians=False` 则返回空 tensor。
+        - **Pixel-to-Gaussian pairs**. [K, 2] with `(gaussian_id, pixel_id)`; returns an empty tensor if `track_pixel_gaussians=False`.
     """
 
     image_dims = means2d.shape[:-2]

@@ -32,7 +32,7 @@ from hloc_utils import run_hloc, CameraModel
 
 
 def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
-    # 将数据拷贝至 distorted/images，后续流程统一在 distorted 目录内进行
+    # Copy assets into distorted/images so the pipeline runs entirely inside distorted
     new_dir = image_dir.parent / "distorted" / "images"
     if new_dir.exists():
         shutil.rmtree(new_dir)
@@ -90,14 +90,14 @@ def main():
 
     args = parser.parse_args()
 
-    # ① 拷贝并标准化图像目录（带进度条）
+    # Step 1: copy and standardize images (with progress bar)
     working_dir = copy_images_fast(args.input_image_dir)
 
-    # ② 定义输出目录（distorted/colmap）
+    # Step 2: configure the output directory (distorted/colmap)
     colmap_dir = working_dir.parent / "colmap"
     colmap_dir.mkdir(parents=True, exist_ok=True)
 
-    # ③ 运行 HLOC SfM
+    # Step 3: run HLOC SfM
     print(f"\n🚀 Running HLOC SfM on {working_dir} ...")
     run_hloc(
         image_dir=working_dir,

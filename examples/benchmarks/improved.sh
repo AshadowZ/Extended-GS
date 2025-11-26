@@ -6,7 +6,7 @@
 
 SCENE_DIR="data/360_v2"
 BASE_RESULT_DIR="output/benchmark_improved_comparison"
-SCENE_LIST="garden" # 只测试garden场景，其他场景：bicycle stump bonsai counter kitchen room
+SCENE_LIST="garden" # Only benchmark the garden scene; others: bicycle stump bonsai counter kitchen room
 RENDER_TRAJ_PATH="ellipse"
 
 # Create results directory

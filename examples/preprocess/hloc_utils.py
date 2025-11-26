@@ -24,7 +24,7 @@ import shutil
 from pathlib import Path
 from typing import Literal
 
-from enum import Enum  # 导入 Enum，因为 CameraModel 是一个 Enum
+from enum import Enum  # Import Enum since CameraModel extends it
 from rich.console import Console
 
 
@@ -131,7 +131,7 @@ def run_hloc(
     sfm_pairs = outputs / "pairs-netvlad.txt"
     features = outputs / "features.h5"
     matches = outputs / "matches.h5"
-    # 把 sparse/0 放在 image_dir 的同级目录
+    # Place sparse/0 alongside the image directory
     sfm_dir = image_dir.parent / "sparse" / "0"
 
     retrieval_conf = extract_features.confs["netvlad"]  # type: ignore
