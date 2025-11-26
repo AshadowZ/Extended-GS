@@ -333,7 +333,9 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
     print("[Perf] Starting co-occurrence matrix and observer threshold computation ...")
     threshold_t0 = time.perf_counter()
     observer_num_thresholds = get_observer_num_thresholds(visible_frames_sparse)
-    print(f"[Perf] Co-occurrence/threshold computation took {time.perf_counter() - threshold_t0:.2f}s")
+    print(
+        f"[Perf] Co-occurrence/threshold computation took {time.perf_counter() - threshold_t0:.2f}s"
+    )
 
     print("[Perf] Starting node list construction ...")
     node_t0 = time.perf_counter()
@@ -350,7 +352,9 @@ def iterative_cluster_masks(tracker: Dict) -> Dict:
         node_info = (0, len(nodes))
         node = Node(mask_list, frame, frame_mask, point_ids, node_info, None)
         nodes.append(node)
-    print(f"[Perf] Node construction took {time.perf_counter() - node_t0:.2f}s with {len(nodes)} nodes.")
+    print(
+        f"[Perf] Node construction took {time.perf_counter() - node_t0:.2f}s with {len(nodes)} nodes."
+    )
 
     nodes = iterative_clustering(nodes, observer_num_thresholds, connect_threshold=0.9)
 
@@ -673,7 +677,9 @@ def export_color_cluster(
     unlabeled_mask = inst_labels < 0
     assigned_mask = ~unlabeled_mask
     if not np.any(unlabeled_mask):
-        print("[Export] All points already have instance colors; skipping KNN recoloring.")
+        print(
+            "[Export] All points already have instance colors; skipping KNN recoloring."
+        )
         return
     if not np.any(assigned_mask):
         print("[Export] No reference instance points available for KNN; skipping.")
@@ -850,7 +856,9 @@ def collect_view_data(
     image_hw_cache: Dict[str, Tuple[int, int]] = {}
     indices = dataset.indices
 
-    pbar = tqdm(range(len(indices)), desc="[Cameras] Preparing views", total=len(indices))
+    pbar = tqdm(
+        range(len(indices)), desc="[Cameras] Preparing views", total=len(indices)
+    )
     for local_idx in pbar:
         parser_idx = indices[local_idx]
         image_path = parser.image_paths[parser_idx]
@@ -953,7 +961,9 @@ def build_mask_gaussian_tracker(
 
         pixel_gaussians = meta.get("pixel_gaussians", None)
         if pixel_gaussians is None or pixel_gaussians.numel() == 0:
-            raise RuntimeError(f"Pixel-to-Gaussian correspondences missing for view {view['image_name']}.")
+            raise RuntimeError(
+                f"Pixel-to-Gaussian correspondences missing for view {view['image_name']}."
+            )
 
         gaus_ids = pixel_gaussians[:, 0].long()
         pixel_ids = pixel_gaussians[:, 1].long()
@@ -1060,7 +1070,9 @@ def main():
     # Stage 3: DBSCAN + point filtering
     print("\nStarting post-processing (Stage 3: DBSCAN + point filtering)...")
     if args.use_gpu_dbscan and not HAS_CUML:
-        raise RuntimeError("Detected --use_gpu_dbscan but cuML is missing; install cuML or remove the flag.")
+        raise RuntimeError(
+            "Detected --use_gpu_dbscan but cuML is missing; install cuML or remove the flag."
+        )
 
     clustering_result = post_process_clusters(
         clustering_result,
@@ -1072,7 +1084,9 @@ def main():
         use_gpu_dbscan=args.use_gpu_dbscan,
     )
     print("Post-processing completed.")
-    print(f"Instance count (post-processing): {len(clustering_result['total_point_ids_list'])}")
+    print(
+        f"Instance count (post-processing): {len(clustering_result['total_point_ids_list'])}"
+    )
 
     # Stage 4: fix under-segmented masks
     print("\nStarting under-segmented mask repair (Stage 4)...")

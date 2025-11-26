@@ -211,7 +211,9 @@ def create_tsdf_mesh(
     cluster_n_triangles = np.asarray(cluster_n_triangles)
 
     # Filter by triangle count threshold per connected cluster
-    min_triangles = int(np.max(cluster_n_triangles) * 0.05)  # keep >=5% of the largest component
+    min_triangles = int(
+        np.max(cluster_n_triangles) * 0.05
+    )  # keep >=5% of the largest component
     mask = cluster_n_triangles[triangle_clusters] >= min_triangles
     mesh.remove_triangles_by_mask(~mask)
     mesh.remove_unreferenced_vertices()
@@ -224,16 +226,27 @@ def create_tsdf_mesh(
 
 def main():
     parser = argparse.ArgumentParser(description="Pi3 -> TSDF Mesh & Visualization")
-    parser.add_argument("--data_dir", type=str, required=True, help="Path to the COLMAP dataset")
-    parser.add_argument("--chunk_size", type=int, default=45, help="Batch size per inference chunk (default: 45)")
+    parser.add_argument(
+        "--data_dir", type=str, required=True, help="Path to the COLMAP dataset"
+    )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=45,
+        help="Batch size per inference chunk (default: 45)",
+    )
     parser.add_argument(
         "--tsdf_frame_interval",
         type=int,
         default=1,
         help="Frame interval for TSDF reconstruction (1=all frames; 2=every other frame)",
     )
-    parser.add_argument("--save_depth_vis", action="store_true", help="Save depth visualizations")
-    parser.add_argument("--save_point_clouds", action="store_true", help="Save colored point clouds")
+    parser.add_argument(
+        "--save_depth_vis", action="store_true", help="Save depth visualizations"
+    )
+    parser.add_argument(
+        "--save_point_clouds", action="store_true", help="Save colored point clouds"
+    )
     parser.add_argument(
         "--conf_percentile",
         type=float,
@@ -241,7 +254,9 @@ def main():
         help="Percentile threshold for removing low-confidence pixels (default: 0)",
     )
     parser.add_argument(
-        "--skip_inference", action="store_true", help="Skip inference and reuse existing chunk_predictions"
+        "--skip_inference",
+        action="store_true",
+        help="Skip inference and reuse existing chunk_predictions",
     )
     args = parser.parse_args()
 
@@ -522,7 +537,9 @@ def main():
                 if valid_depths.size > 0:
                     max_depth = np.max(valid_depths)
                     if max_depth > 65504:  # float16 max range
-                        print(f"Warning: depth value {max_depth:.2f} exceeds float16 range and was clamped automatically")
+                        print(
+                            f"Warning: depth value {max_depth:.2f} exceeds float16 range and was clamped automatically"
+                        )
                         depth_to_save = np.clip(depth_to_save, 0, 65504)
                 depth_to_save = depth_to_save.astype(np.float16)
 

@@ -213,13 +213,17 @@ def run_hloc(
         project_root = image_dir.parent.parent
     else:
         project_root = image_dir.parent
-        CONSOLE.print("[bold red]Warning: Unexpected directory structure. Assuming parent as root.[/bold red]")
+        CONSOLE.print(
+            "[bold red]Warning: Unexpected directory structure. Assuming parent as root.[/bold red]"
+        )
 
     target_images_dir = project_root / "images"
     target_sparse_dir = project_root / "sparse" / "0"
 
     if camera_model in [CameraModel.PINHOLE, CameraModel.SIMPLE_PINHOLE]:
-        CONSOLE.print(f"[bold green]ℹ️ Camera model is {camera_model.name}. Skipping undistortion.[/bold green]")
+        CONSOLE.print(
+            f"[bold green]ℹ️ Camera model is {camera_model.name}. Skipping undistortion.[/bold green]"
+        )
         CONSOLE.print("🔄 Migrating data to 3DGS standard format...")
 
         if target_images_dir.exists():
@@ -238,7 +242,9 @@ def run_hloc(
 
         CONSOLE.print(f"[bold green]✅ Data migration complete![/bold green]")
     else:
-        CONSOLE.print(f"[bold yellow]🔧 Running pycolmap.undistort_images for {camera_model.name}...[/bold yellow]")
+        CONSOLE.print(
+            f"[bold yellow]🔧 Running pycolmap.undistort_images for {camera_model.name}...[/bold yellow]"
+        )
 
         try:
             CONSOLE.print(f"   Input Model:  {sfm_dir}")
@@ -283,7 +289,9 @@ def run_hloc(
                     shutil.rmtree(stereo_dir)
                     CONSOLE.print(f"  > Removed stereo directory: {stereo_dir}")
                 except OSError as cleanup_err:
-                    CONSOLE.print(f"[bold red]Warning:[/bold red] Failed to remove {stereo_dir}: {cleanup_err}")
+                    CONSOLE.print(
+                        f"[bold red]Warning:[/bold red] Failed to remove {stereo_dir}: {cleanup_err}"
+                    )
 
             CONSOLE.print(f"[bold green]✅ Undistortion complete![/bold green]")
         except Exception as err:  # pragma: no cover - best effort logging

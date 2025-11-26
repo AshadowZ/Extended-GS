@@ -291,7 +291,9 @@ def create_tsdf_mesh(
     cluster_n_triangles = np.asarray(cluster_n_triangles)
 
     # Filter by the number of faces per connected component
-    min_triangles = int(np.max(cluster_n_triangles) * 0.05)  # keep clusters >=5% of the largest one
+    min_triangles = int(
+        np.max(cluster_n_triangles) * 0.05
+    )  # keep clusters >=5% of the largest one
     mask = cluster_n_triangles[triangle_clusters] >= min_triangles
     mesh.remove_triangles_by_mask(~mask)
     mesh.remove_unreferenced_vertices()
@@ -304,16 +306,27 @@ def create_tsdf_mesh(
 
 def main():
     parser = argparse.ArgumentParser(description="VGGT -> TSDF Mesh & Visualization")
-    parser.add_argument("--data_dir", type=str, required=True, help="Path to the COLMAP dataset")
-    parser.add_argument("--chunk_size", type=int, default=45, help="Batch size per inference chunk (default: 45)")
+    parser.add_argument(
+        "--data_dir", type=str, required=True, help="Path to the COLMAP dataset"
+    )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=45,
+        help="Batch size per inference chunk (default: 45)",
+    )
     parser.add_argument(
         "--tsdf_frame_interval",
         type=int,
         default=1,
         help="Frame interval for TSDF reconstruction (default 1 = all frames; 2 uses every other frame)",
     )
-    parser.add_argument("--save_depth_vis", action="store_true", help="Save depth visualization images")
-    parser.add_argument("--save_point_clouds", action="store_true", help="Save colored point clouds")
+    parser.add_argument(
+        "--save_depth_vis", action="store_true", help="Save depth visualization images"
+    )
+    parser.add_argument(
+        "--save_point_clouds", action="store_true", help="Save colored point clouds"
+    )
     parser.add_argument(
         "--conf_percentile",
         type=float,
@@ -367,7 +380,9 @@ def main():
     else:
         # Width >= height -> use crop mode
         preprocessing_mode = "crop"
-        print(f"[INFO] First image {first_width}x{first_height} (W>=H); using crop mode")
+        print(
+            f"[INFO] First image {first_width}x{first_height} (W>=H); using crop mode"
+        )
     first_image.close()
     ## ====== 1. Load COLMAP metadata end ========
 

@@ -301,7 +301,9 @@ def run_inference(
                                     )
                                 depth_np = depth_np * coef + intercept
                             except Exception as exc:
-                                print(f"[WARN] COLMAP alignment failed for {image_name}: {exc}")
+                                print(
+                                    f"[WARN] COLMAP alignment failed for {image_name}: {exc}"
+                                )
 
             if depth_np is not None and remove_depth_edge:
                 edge_mask = utils3d.numpy.depth_edge(
@@ -490,7 +492,9 @@ def run_inference(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Multi-threaded MoGe-2 normal inference")
+    parser = argparse.ArgumentParser(
+        description="Multi-threaded MoGe-2 normal inference"
+    )
     parser.add_argument(
         "--data_dir",
         type=str,

@@ -69,7 +69,9 @@ def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
 def main():
     parser = argparse.ArgumentParser(description="Run SfM using HLOC toolbox")
 
-    parser.add_argument("--input_image_dir", type=Path, required=True, help="Path to original images.")
+    parser.add_argument(
+        "--input_image_dir", type=Path, required=True, help="Path to original images."
+    )
     parser.add_argument(
         "--camera_model",
         type=str,
