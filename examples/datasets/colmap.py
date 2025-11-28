@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 import cv2
 import imageio.v2 as imageio
@@ -404,29 +404,64 @@ class Parser:
 
 
 class Dataset:
-    """A simple dataset class."""
+    """A simple dataset class with optional data preloading."""
 
     def __init__(
         self,
         parser: Parser,
         split: str = "train",
         patch_size: Optional[int] = None,
+        preload: Literal["none", "cpu", "cuda"] = "none",
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
+        self.preload_mode = preload
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
             self.indices = indices
-            # self.indices = indices[indices % self.parser.test_every != 0]
         else:
             self.indices = indices[indices % self.parser.test_every == 0]
+        if preload not in {"none", "cpu", "cuda"}:
+            raise ValueError(f"Unsupported preload mode: {preload}")
+        self._preload_cache: Optional[Dict[int, Dict[str, torch.Tensor]]] = None
+        if self.preload_mode != "none":
+            self._preload_all()
 
     def __len__(self):
         return len(self.indices)
 
+    def _preload_all(self) -> None:
+        device = torch.device(
+            "cuda" if self.preload_mode == "cuda" else "cpu"
+        )
+        self._preload_cache = {}
+        for idx in self.indices:
+            base = self._load_base_sample(idx)
+            tensors = self._convert_to_tensors(base, device=device)
+            self._preload_cache[idx] = tensors
+
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
+        if self._preload_cache is not None:
+            base_sample = self._clone_sample(self._preload_cache[index])
+        else:
+            base = self._load_base_sample(index)
+            base_sample = self._convert_to_tensors(base, device=torch.device("cpu"))
+        return self._prepare_sample(base_sample, item)
+
+    def _clone_sample(
+        self, sample: Dict[str, Optional[torch.Tensor]]
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        cloned = {}
+        for k, v in sample.items():
+            if isinstance(v, torch.Tensor):
+                cloned[k] = v.clone()
+            else:
+                cloned[k] = v
+        return cloned
+
+    def _load_base_sample(self, index: int) -> Dict[str, Any]:
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
@@ -470,50 +505,97 @@ class Dataset:
                 normal_data = cv2.remap(normal_data, mapx, mapy, cv2.INTER_LINEAR)
                 normal_data = normal_data[y : y + h, x : x + w]
 
+        return {
+            "image": image,
+            "depth": depth_data,
+            "normal": normal_data,
+            "mask": mask,
+            "K": K,
+            "camtoworld": camtoworlds,
+        }
+
+    def _convert_to_tensors(
+        self, sample: Dict[str, Any], device: torch.device
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        tensor_sample: Dict[str, Optional[torch.Tensor]] = {}
+        tensor_sample["image"] = (
+            torch.from_numpy(sample["image"]).float().to(device)
+        )
+        tensor_sample["depth"] = (
+            torch.from_numpy(sample["depth"]).float().to(device)
+            if sample["depth"] is not None
+            else None
+        )
+        tensor_sample["normal"] = (
+            torch.from_numpy(sample["normal"]).float().to(device)
+            if sample["normal"] is not None
+            else None
+        )
+        tensor_sample["mask"] = (
+            torch.from_numpy(sample["mask"]).bool().to(device)
+            if sample["mask"] is not None
+            else None
+        )
+        tensor_sample["K"] = torch.from_numpy(sample["K"]).float().to(device)
+        tensor_sample["camtoworld"] = (
+            torch.from_numpy(sample["camtoworld"]).float().to(device)
+        )
+        return tensor_sample
+
+    def _prepare_sample(
+        self,
+        sample: Dict[str, Optional[torch.Tensor]],
+        item: int,
+    ) -> Dict[str, Any]:
+        image = sample["image"]
+        depth = sample["depth"]
+        normal = sample["normal"]
+        mask = sample["mask"]
+        K = sample["K"]
+        camtoworlds = sample["camtoworld"]
+
+        if image is None:
+            raise RuntimeError("Image tensor missing in dataset sample.")
+
         if self.patch_size is not None:
-            # Random crop.
             h, w = image.shape[:2]
-            x = np.random.randint(0, max(w - self.patch_size, 1))
-            y = np.random.randint(0, max(h - self.patch_size, 1))
-            image = image[y : y + self.patch_size, x : x + self.patch_size]
-
-            # Apply to depth (using same x, y)
-            if depth_data is not None:
-                depth_data = depth_data[
-                    y : y + self.patch_size, x : x + self.patch_size
-                ]
-            # Apply to normal (using same x, y)
-            if normal_data is not None:
-                normal_data = normal_data[
-                    y : y + self.patch_size, x : x + self.patch_size
-                ]
-            # Apply to mask (if exists)
+            x_max = max(w - self.patch_size, 0)
+            y_max = max(h - self.patch_size, 0)
+            x = int(np.random.randint(0, x_max + 1)) if x_max > 0 else 0
+            y = int(np.random.randint(0, y_max + 1)) if y_max > 0 else 0
+            y_slice = slice(y, y + min(self.patch_size, h))
+            x_slice = slice(x, x + min(self.patch_size, w))
+            image = image[y_slice, x_slice]
+            if depth is not None and depth.numel() > 0:
+                depth = depth[y_slice, x_slice]
+            if normal is not None and normal.numel() > 0:
+                normal = normal[y_slice, x_slice]
             if mask is not None:
-                mask = mask[y : y + self.patch_size, x : x + self.patch_size]
-
+                mask = mask[y_slice, x_slice]
+            K = K.clone()
             K[0, 2] -= x
             K[1, 2] -= y
 
-        if depth_data is not None:
-            depth_prior = torch.from_numpy(depth_data).float().unsqueeze(-1)
+        if depth is not None and depth.numel() > 0:
+            depth_prior = depth.unsqueeze(-1)
         else:
-            depth_prior = torch.empty(0)
-        if normal_data is not None:  # needs to be inverted, to opencv coord
-            normal_prior = torch.from_numpy(normal_data).float() / 255.0
-            normal_prior = 1.0 - normal_prior * 2.0
+            depth_prior = torch.empty(0, device=image.device)
+
+        if normal is not None and normal.numel() > 0:
+            normal_prior = 1.0 - (normal / 255.0) * 2.0
         else:
-            normal_prior = torch.empty(0)
+            normal_prior = torch.empty(0, device=image.device)
 
         data = {
-            "K": torch.from_numpy(K).float(),
-            "camtoworld": torch.from_numpy(camtoworlds).float(),
-            "image": torch.from_numpy(image).float(),
-            "image_id": item,  # the index of the image in the dataset
-            "depth_prior": depth_prior,  # [H, W, 1]
-            "normal_prior": normal_prior,  # [H, W, 3]
+            "K": K,
+            "camtoworld": camtoworlds,
+            "image": image,
+            "image_id": torch.tensor(item, device=image.device, dtype=torch.long),
+            "depth_prior": depth_prior,
+            "normal_prior": normal_prior,
         }
         if mask is not None:
-            data["mask"] = torch.from_numpy(mask).bool()
+            data["mask"] = mask
 
         return data
 

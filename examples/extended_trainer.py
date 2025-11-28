@@ -76,6 +76,8 @@ class Config:
     normalize_world_space: bool = True
     # Camera model
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
+    # Dataset preload mode: none, cpu, or cuda
+    dataset_preload: Literal["none", "cpu", "cuda"] = "none"
 
     # Port for the viewer server
     port: int = 8080
@@ -450,8 +452,9 @@ class Runner:
             self.parser,
             split="train",
             patch_size=cfg.patch_size,
+            preload=cfg.dataset_preload,
         )
-        self.valset = Dataset(self.parser, split="val")
+        self.valset = Dataset(self.parser, split="val", preload=cfg.dataset_preload)
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
@@ -697,13 +700,15 @@ class Runner:
                 )
             )
 
+        pin_memory = cfg.dataset_preload != "cuda"
+        train_num_workers = 0 if cfg.dataset_preload == "cuda" else 8
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
             batch_size=cfg.batch_size,
             shuffle=True,
-            num_workers=8,
-            persistent_workers=True,
-            pin_memory=True,
+            num_workers=train_num_workers,
+            persistent_workers=train_num_workers > 0,
+            pin_memory=pin_memory,
         )
         trainloader_iter = iter(trainloader)
 
@@ -1290,8 +1295,14 @@ class Runner:
         world_rank = self.world_rank
         world_size = self.world_size
 
+        pin_memory = cfg.dataset_preload != "cuda"
+        val_num_workers = 0 if cfg.dataset_preload == "cuda" else 1
         valloader = torch.utils.data.DataLoader(
-            self.valset, batch_size=1, shuffle=False, num_workers=1
+            self.valset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=val_num_workers,
+            pin_memory=pin_memory,
         )
         ellipse_time = 0
         metrics = defaultdict(list)
