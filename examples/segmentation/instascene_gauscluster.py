@@ -956,7 +956,7 @@ def build_mask_gaussian_tracker(
                 with_eval3d=False,
                 track_pixel_gaussians=True,
                 max_gaussians_per_pixel=100,
-                pixel_gaussian_threshold=0.25,
+                pixel_gaussian_threshold=0.35,
             )
 
         pixel_gaussians = meta.get("pixel_gaussians", None)

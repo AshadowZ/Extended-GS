@@ -144,7 +144,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         labels_clamped[labels_clamped < 0] = default_idx
         palette_tensor = torch.from_numpy(palette_full).float().to(device)
         labels_tensor = torch.from_numpy(labels_clamped).long().to(device)
-        inst_colors = palette_tensor[labels_tensor] / 0.28209479177387814
+        inst_colors = palette_tensor[labels_tensor] / 0.5
         instance_colors_tensor = inst_colors.unsqueeze(1).contiguous()
         print(
             f"[Instance] Loaded labels from {args.instance_labels} with {num_instances} instances."
