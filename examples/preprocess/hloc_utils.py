@@ -22,7 +22,7 @@ Requires hloc module from : https://github.com/cvg/Hierarchical-Localization
 import sys
 import shutil
 from pathlib import Path
-from typing import Literal
+from typing import Any, List, Literal, Tuple, Set
 
 from enum import Enum  # Import Enum since CameraModel extends it
 from rich.console import Console
@@ -42,6 +42,78 @@ class CameraModel(Enum):
 
 
 CONSOLE = Console(width=120)
+
+
+MODEL_FILENAMES = (
+    "cameras.bin",
+    "images.bin",
+    "points3D.bin",
+    "frames.bin",
+    "rigs.bin",
+)
+
+
+def _get_candidate_model_dirs(sparse_root: Path) -> List[Path]:
+    """Return all folders under sparse_root that look like COLMAP models."""
+
+    def looks_like_model_dir(path: Path) -> bool:
+        return path.is_dir() and (path / "cameras.bin").exists()
+
+    candidates: List[Path] = []
+    seen: Set[Path] = set()
+
+    def add_candidate(path: Path) -> None:
+        if path in seen or not looks_like_model_dir(path):
+            return
+        seen.add(path)
+        candidates.append(path)
+
+    add_candidate(sparse_root)
+    if sparse_root.exists():
+        for cameras_file in sorted(sparse_root.rglob("cameras.bin")):
+            add_candidate(cameras_file.parent)
+    return candidates
+
+
+def _select_largest_colmap_model(
+    pycolmap_module: Any, sparse_root: Path
+) -> Tuple[Path, int]:
+    """Pick the model with the most registered images and move it to sparse_root."""
+    candidates = _get_candidate_model_dirs(sparse_root)
+    if not candidates:
+        raise RuntimeError(f"No COLMAP models found under {sparse_root}")
+
+    model_stats: List[Tuple[Path, int]] = []
+    for model_dir in candidates:
+        try:
+            reconstruction = pycolmap_module.Reconstruction(str(model_dir))
+            model_stats.append((model_dir, reconstruction.num_reg_images()))
+        except Exception as exc:  # pragma: no cover - logging best effort
+            CONSOLE.print(
+                f"[bold red]Warning:[/bold red] Failed to read model {model_dir}: {exc}"
+            )
+    if not model_stats:
+        raise RuntimeError(
+            f"Unable to read any COLMAP reconstructions under {sparse_root}"
+        )
+    best_dir, best_count = max(model_stats, key=lambda item: item[1])
+
+    if best_dir != sparse_root:
+        CONSOLE.print(
+            f"[bold yellow]↻ Detected largest model in {best_dir}. Moving files to {sparse_root}.[/bold yellow]"
+        )
+        sparse_root.mkdir(parents=True, exist_ok=True)
+        for filename in MODEL_FILENAMES:
+            src = best_dir / filename
+            if not src.exists():
+                continue
+            dst = sparse_root / filename
+            if dst.exists():
+                dst.unlink()
+            shutil.move(str(src), str(dst))
+        best_dir = sparse_root
+
+    return best_dir, best_count
 
 
 def run_hloc(
@@ -131,8 +203,11 @@ def run_hloc(
     sfm_pairs = outputs / "pairs-netvlad.txt"
     features = outputs / "features.h5"
     matches = outputs / "matches.h5"
-    # Place sparse/0 alongside the image directory
-    sfm_dir = image_dir.parent / "sparse" / "0"
+    # Let COLMAP write every model under distorted/sparse
+    sfm_root = image_dir.parent / "sparse"
+    if sfm_root.exists():
+        shutil.rmtree(sfm_root)
+    sfm_root.mkdir(parents=True, exist_ok=True)
 
     retrieval_conf = extract_features.confs["netvlad"]  # type: ignore
     feature_conf = extract_features.confs[feature_type]  # type: ignore
@@ -180,7 +255,7 @@ def run_hloc(
             }
         )
         refined, _ = sfm.reconstruction(
-            sfm_dir,
+            sfm_root,
             image_dir,
             sfm_pairs,
             features,
@@ -194,7 +269,7 @@ def run_hloc(
 
     else:
         reconstruction.main(  # type: ignore
-            sfm_dir,
+            sfm_root,
             image_dir,
             sfm_pairs,
             features,
@@ -203,6 +278,16 @@ def run_hloc(
             image_options=image_options,
             verbose=verbose,
         )
+
+    try:
+        sfm_dir, num_reg_images = _select_largest_colmap_model(pycolmap, sfm_root)
+        CONSOLE.print(
+            f"[bold green]ℹ️ Selected COLMAP model {sfm_dir.name if sfm_dir != sfm_root else sfm_dir} "
+            f"with {num_reg_images} registered images.[/bold green]"
+        )
+    except RuntimeError as err:
+        CONSOLE.print(f"[bold red]Error:[/bold red] {err}")
+        sys.exit(1)
 
     # =========================================================================
     # Post-processing: Image Undistortion OR Data Migration
