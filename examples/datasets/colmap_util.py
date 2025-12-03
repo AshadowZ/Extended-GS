@@ -324,17 +324,17 @@ def read_model(path, ext=""):
 
 def get_intrinsics(cam):
     ixt = np.eye(3).astype(np.float32)
-    if cam.model == "OPENCV":
+    if cam.model in {"OPENCV", "FULL_OPENCV"}:
         ixt[0, 0] = cam.params[0]
         ixt[1, 1] = cam.params[1]
         ixt[0, 2] = cam.params[2]
         ixt[1, 2] = cam.params[3]
-    elif cam.model == "SIMPLE_PINHOLE":
+    elif cam.model in {"SIMPLE_PINHOLE", "SIMPLE_RADIAL"}:
         ixt[0, 0] = cam.params[0]
         ixt[1, 1] = cam.params[0]
         ixt[0, 2] = cam.params[1]
         ixt[1, 2] = cam.params[2]
-    elif cam.model == "PINHOLE":
+    elif cam.model in {"PINHOLE", "RADIAL"}:
         ixt[0, 0] = cam.params[0]
         ixt[1, 1] = cam.params[1]
         ixt[0, 2] = cam.params[2]
