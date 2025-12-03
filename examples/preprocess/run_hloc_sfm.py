@@ -26,17 +26,22 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import cv2
+import numpy as np
+from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 
 from hloc_utils import run_hloc, CameraModel
 
 
-def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
-    # Copy assets into distorted/images so the pipeline runs entirely inside distorted
-    new_dir = image_dir.parent / "distorted" / "images"
-    if new_dir.exists():
-        shutil.rmtree(new_dir)
-    new_dir.mkdir(parents=True, exist_ok=True)
+def copy_images_fast(
+    image_dir: Path, output_root: Path, image_prefix: str = "frame_"
+) -> Path:
+    """Copy original images into the provided distorted/images directory."""
+
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
 
     image_exts = [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"]
     image_paths = sorted(
@@ -46,11 +51,11 @@ def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
     if not image_paths:
         raise RuntimeError(f"No images found in {image_dir}")
 
-    print(f"📁 Copying {len(image_paths)} images to {new_dir} ...")
+    print(f"📁 Copying {len(image_paths)} images to {output_root} ...")
 
     def copy_one(idx_path):
         idx, src_path = idx_path
-        dst_path = new_dir / f"{image_prefix}{idx:05d}{src_path.suffix.lower()}"
+        dst_path = output_root / f"{image_prefix}{idx:05d}{src_path.suffix.lower()}"
         shutil.copy2(src_path, dst_path)
 
     with ThreadPoolExecutor(max_workers=16) as ex:
@@ -63,7 +68,119 @@ def copy_images_fast(image_dir: Path, image_prefix: str = "frame_") -> Path:
         )
 
     print("✅ Copy finished.")
-    return new_dir
+    return output_root
+
+
+def get_pano_virtual_configs(hfov_deg: float = 110.0, vfov_deg: float = 110.0):
+    """Return rotations for five-view virtual cameras used during panorama splits."""
+
+    # View order: front, right, back, left, up as (yaw, pitch)
+    yaw_pitch_pairs = (
+        (0.0, 0.0),
+        (90.0, 0.0),
+        (180.0, 0.0),
+        (-90.0, 0.0),
+        (0.0, 90.0),
+    )
+
+    rots = []
+    for yaw, pitch in yaw_pitch_pairs:
+        rot = Rotation.from_euler("XY", [-pitch, -yaw], degrees=True).as_matrix()
+        rots.append(rot)
+
+    return rots, hfov_deg, vfov_deg
+
+
+def split_panoramas(
+    image_dir: Path,
+    output_root: Path,
+    image_prefix: str = "frame_",
+    downscale: float = 1.0,
+) -> Path:
+    """Split each panorama into five perspective views and save by camera index."""
+
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    image_exts = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+    pano_paths = sorted([p for p in image_dir.iterdir() if p.suffix.lower() in image_exts])
+    if not pano_paths:
+        raise RuntimeError(f"No images found in {image_dir}")
+
+    print(f"🧩 Detected {len(pano_paths)} panoramas. Splitting into perspective views...")
+    print(f"📂 Output Directory: {output_root}")
+
+    first_img = cv2.imread(str(pano_paths[0]))
+    if first_img is None:
+        raise RuntimeError(f"Cannot read image: {pano_paths[0]}")
+    pano_h, pano_w = first_img.shape[:2]
+
+    rots, hfov, vfov = get_pano_virtual_configs()
+    w_virt_raw = int(pano_w * hfov / 360)
+    h_virt_raw = int(pano_h * vfov / 180)
+    w_virt = max(1, int(w_virt_raw / downscale))
+    h_virt = max(1, int(h_virt_raw / downscale))
+    print(f"📏 Resolution: {w_virt}x{h_virt} (Downscale factor: {downscale})")
+    focal = w_virt / (2 * np.tan(np.deg2rad(hfov) / 2))
+
+    cx, cy = w_virt / 2 - 0.5, h_virt / 2 - 0.5
+    y_grid, x_grid = np.indices((h_virt, w_virt))
+    rays = np.stack(
+        [
+            (x_grid - cx),
+            (y_grid - cy),
+            np.full_like(x_grid, focal, dtype=np.float32),
+        ],
+        axis=-1,
+    )
+    rays /= np.linalg.norm(rays, axis=-1, keepdims=True)
+
+    def process_one_pano(idx_path):
+        idx, src_path = idx_path
+        img = cv2.imread(str(src_path))
+        if img is None:
+            return
+
+        for cam_idx, rot in enumerate(rots):
+            rays_rotated = rays @ rot
+            x, y, z = (
+                rays_rotated[..., 0],
+                rays_rotated[..., 1],
+                rays_rotated[..., 2],
+            )
+            yaw = np.arctan2(x, z)
+            pitch = -np.arctan2(
+                y, np.linalg.norm(rays_rotated[..., [0, 2]], axis=-1)
+            )
+
+            u = (1 + yaw / np.pi) / 2 * pano_w
+            v = (1 - pitch * 2 / np.pi) / 2 * pano_h
+
+            perspective_img = cv2.remap(
+                img,
+                u.astype(np.float32),
+                v.astype(np.float32),
+                cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_WRAP,
+            )
+
+            sub_dir = output_root / f"pano_camera{cam_idx}"
+            sub_dir.mkdir(parents=True, exist_ok=True)
+            save_path = sub_dir / f"{image_prefix}{idx:05d}{src_path.suffix.lower()}"
+            cv2.imwrite(str(save_path), perspective_img)
+
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        list(
+            tqdm(
+                ex.map(process_one_pano, enumerate(pano_paths, start=1)),
+                total=len(pano_paths),
+                unit="pano",
+            )
+        )
+
+    print("✅ Panorama splitting finished.")
+    return output_root
 
 
 def main():
@@ -89,11 +206,32 @@ def main():
     parser.add_argument("--feature_type", type=str, default="superpoint_aachen")
     parser.add_argument("--matcher_type", type=str, default="superglue")
     parser.add_argument("--use_single_camera_mode", type=bool, default=True)
+    parser.add_argument(
+        "--is_panorama",
+        action="store_true",
+        help="If set, split panoramas into perspective views and exit.",
+    )
+    parser.add_argument(
+        "--pano_downscale",
+        type=float,
+        default=1.0,
+        help="Downscale factor for panorama splitting (>=1).",
+    )
 
     args = parser.parse_args()
+    distorted_images_dir = args.input_image_dir.parent / "distorted" / "images"
 
-    # Step 1: copy and standardize images (with progress bar)
-    working_dir = copy_images_fast(args.input_image_dir)
+    if args.is_panorama:
+        print("\n🔄 Mode: Panorama Processing")
+        working_dir = split_panoramas(
+            args.input_image_dir,
+            distorted_images_dir,
+            downscale=max(1.0, args.pano_downscale),
+        )
+        print("🛑 Splitting complete. Exiting script as requested (is_panorama=True).")
+        return
+    else:
+        working_dir = copy_images_fast(args.input_image_dir, distorted_images_dir)
 
     # Step 2: configure the output directory (distorted/colmap)
     colmap_dir = working_dir.parent / "colmap"
