@@ -31,7 +31,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 
-from hloc_utils import run_hloc, CameraModel
+from hloc_utils import run_hloc, CameraModel, PANO_CONFIG
 
 
 def copy_images_fast(
@@ -71,20 +71,13 @@ def copy_images_fast(
     return output_root
 
 
-def get_pano_virtual_configs(hfov_deg: float = 110.0, vfov_deg: float = 110.0):
-    """Return rotations for five-view virtual cameras used during panorama splits."""
+def get_pano_virtual_configs():
+    """Return rotations and FOV based on shared PANO_CONFIG."""
 
-    # View order: front, right, back, left, up as (yaw, pitch)
-    yaw_pitch_pairs = (
-        (0.0, 0.0),
-        (90.0, 0.0),
-        (180.0, 0.0),
-        (-90.0, 0.0),
-        (0.0, 90.0),
-    )
-
+    hfov_deg = PANO_CONFIG["fov"]
+    vfov_deg = PANO_CONFIG["fov"]
     rots = []
-    for yaw, pitch in yaw_pitch_pairs:
+    for yaw, pitch in PANO_CONFIG["views"]:
         rot = Rotation.from_euler("XY", [-pitch, -yaw], degrees=True).as_matrix()
         rots.append(rot)
 
@@ -228,8 +221,6 @@ def main():
             distorted_images_dir,
             downscale=max(1.0, args.pano_downscale),
         )
-        print("🛑 Splitting complete. Exiting script as requested (is_panorama=True).")
-        return
     else:
         working_dir = copy_images_fast(args.input_image_dir, distorted_images_dir)
 
@@ -243,10 +234,12 @@ def main():
         image_dir=working_dir,
         colmap_dir=colmap_dir,
         camera_model=CameraModel[args.camera_model],
+        verbose=True,
         matching_method=args.matching_method,
         feature_type=args.feature_type,
         matcher_type=args.matcher_type,
         use_single_camera_mode=args.use_single_camera_mode,
+        is_panorama=args.is_panorama,
     )
 
     project_root = args.input_image_dir.parent

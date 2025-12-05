@@ -24,6 +24,9 @@ import shutil
 from pathlib import Path
 from typing import Any, List, Literal, Tuple, Set
 
+import cv2
+import numpy as np
+from scipy.spatial.transform import Rotation
 from enum import Enum  # Import Enum since CameraModel extends it
 from rich.console import Console
 
@@ -42,6 +45,57 @@ class CameraModel(Enum):
 
 
 CONSOLE = Console(width=120)
+
+
+PANO_CONFIG = {
+    "fov": 100.0,
+    "views": [
+        (0.0, 0.0),
+        (90.0, 0.0),
+        (180.0, 0.0),
+        (-90.0, 0.0),
+        (0.0, 90.0),
+    ],
+}
+
+
+def get_rig_rotations() -> List[np.ndarray]:
+    """Return panorama rig rotations defined in PANO_CONFIG."""
+
+    rotations: List[np.ndarray] = []
+    for yaw, pitch in PANO_CONFIG["views"]:
+        rot = Rotation.from_euler("XY", [-pitch, -yaw], degrees=True).as_matrix()
+        rotations.append(rot)
+    return rotations
+
+
+def create_pano_rig_config(ref_idx: int = 0):
+    """Create a pycolmap RigConfig describing the five-view panorama setup."""
+
+    try:
+        import pycolmap
+    except ImportError:
+        return None
+
+    cams_from_pano = get_rig_rotations()
+    rig_cameras = []
+    for idx, cam_from_pano_R in enumerate(cams_from_pano):
+        if idx == ref_idx:
+            cam_from_rig = None
+        else:
+            cam_from_ref_R = cam_from_pano_R @ cams_from_pano[ref_idx].T
+            cam_from_rig = pycolmap.Rigid3d(
+                pycolmap.Rotation3d(cam_from_ref_R), np.zeros(3)
+            )
+
+        rig_cameras.append(
+            pycolmap.RigConfigCamera(
+                ref_sensor=(idx == ref_idx),
+                image_prefix=f"pano_camera{idx}/",
+                cam_from_rig=cam_from_rig,
+            )
+        )
+    return pycolmap.RigConfig(cameras=rig_cameras)
 
 
 MODEL_FILENAMES = (
@@ -147,6 +201,7 @@ def run_hloc(
     num_matched: int = 50,
     refine_pixsfm: bool = False,
     use_single_camera_mode: bool = True,
+    is_panorama: bool = False,
 ) -> None:
     """Runs hloc on the images.
 
@@ -199,6 +254,16 @@ def run_hloc(
         )
         sys.exit(1)
 
+    if is_panorama and camera_model not in (
+        CameraModel.PINHOLE,
+        CameraModel.SIMPLE_PINHOLE,
+    ):
+        CONSOLE.print(
+            "[bold yellow]⚠️ Panorama mode currently supports PINHOLE/SIMPLE_PINHOLE only."
+            " Forcing camera_model=PINHOLE.[/bold yellow]"
+        )
+        camera_model = CameraModel.PINHOLE
+
     outputs = colmap_dir
     sfm_pairs = outputs / "pairs-netvlad.txt"
     features = outputs / "features.h5"
@@ -213,22 +278,34 @@ def run_hloc(
     feature_conf = extract_features.confs[feature_type]  # type: ignore
     matcher_conf = match_features.confs[matcher_type]  # type: ignore
 
-    references = [p.relative_to(image_dir).as_posix() for p in image_dir.iterdir()]
+    valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+    references = sorted(
+        [
+            p.relative_to(image_dir).as_posix()
+            for p in image_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in valid_extensions
+        ]
+    )
     extract_features.main(feature_conf, image_dir, image_list=references, feature_path=features)  # type: ignore
     if matching_method == "exhaustive":
-        pairs_from_exhaustive.main(sfm_pairs, image_list=references)  # type: ignore
+        pairs_from_exhaustive.main(  # type: ignore
+            sfm_pairs,
+            image_list=references,
+            groupby_folder=is_panorama,
+        )
     elif matching_method == "sequential":
         # Use sequential matching with specified parameters
         retrieval_path = extract_features.main(retrieval_conf, image_dir, outputs)
         pairs_from_sequential.main(
             output=sfm_pairs,
             image_list=references,
-            window_size=6,
+            window_size=10,
             quadratic_overlap=True,
             use_loop_closure=True,
             retrieval_path=retrieval_path,
             retrieval_interval=2,
-            num_loc=5,
+            num_loc=3,
+            groupby_folder=is_panorama,
         )
     else:
         retrieval_path = extract_features.main(retrieval_conf, image_dir, outputs)  # type: ignore
@@ -237,8 +314,41 @@ def run_hloc(
     match_features.main(matcher_conf, sfm_pairs, features=features, matches=matches)  # type: ignore
 
     image_options = pycolmap.ImageReaderOptions(camera_model=camera_model.value)  # type: ignore
+    mapper_opts: dict[str, Any] = {}
+    rig_config = None
 
-    if use_single_camera_mode:  # one camera per all frames
+    if is_panorama:
+        camera_mode = pycolmap.CameraMode.PER_FOLDER  # type: ignore
+        CONSOLE.print("[bold green]ℹ️ Creating Panorama Rig Configuration...[/bold green]")
+        rig_config = create_pano_rig_config()
+
+        if references:
+            first_img_path = image_dir / references[0]
+            img = cv2.imread(str(first_img_path))
+            if img is None:
+                raise RuntimeError(f"Cannot read calibration image: {first_img_path}")
+            h, w = img.shape[:2]
+            hfov_deg = PANO_CONFIG["fov"]
+            hfov_rad = np.deg2rad(hfov_deg)
+            focal = w / (2 * np.tan(hfov_rad / 2))
+            cx, cy = w / 2.0 - 0.5, h / 2.0 - 0.5
+
+            if camera_model == CameraModel.PINHOLE:
+                image_options.camera_params = f"{focal},{focal},{cx},{cy}"
+            elif camera_model == CameraModel.SIMPLE_PINHOLE:
+                image_options.camera_params = f"{focal},{cx},{cy}"
+
+            CONSOLE.print(
+                f"[bold green]ℹ️ Initialized Intrinsics: {w}x{h}, params={image_options.camera_params}[/bold green]"
+            )
+
+        mapper_opts = {
+            "ba_refine_sensor_from_rig": False,
+            "ba_refine_focal_length": False,
+            "ba_refine_principal_point": False,
+            "ba_refine_extra_params": False,
+        }
+    elif use_single_camera_mode:  # one camera per all frames
         camera_mode = pycolmap.CameraMode.SINGLE  # type: ignore
     else:  # one camera per frame
         camera_mode = pycolmap.CameraMode.PER_IMAGE  # type: ignore
@@ -277,6 +387,8 @@ def run_hloc(
             camera_mode=camera_mode,  # type: ignore
             image_options=image_options,
             verbose=verbose,
+            mapper_options=mapper_opts or None,
+            rig_config=rig_config,
         )
 
     try:
@@ -305,7 +417,53 @@ def run_hloc(
     target_images_dir = project_root / "images"
     target_sparse_dir = project_root / "sparse" / "0"
 
-    if camera_model in [CameraModel.PINHOLE, CameraModel.SIMPLE_PINHOLE]:
+    if is_panorama:
+        CONSOLE.print(
+            "[bold green]ℹ️ Processing Panorama: Flattening directory structure for 3DGS...[/bold green]"
+        )
+
+        if target_images_dir.exists():
+            shutil.rmtree(target_images_dir)
+        target_images_dir.mkdir(parents=True, exist_ok=True)
+
+        if target_sparse_dir.exists():
+            shutil.rmtree(target_sparse_dir)
+        target_sparse_dir.mkdir(parents=True, exist_ok=True)
+
+        name_map: dict[str, str] = {}
+        src_images = sorted(
+            [
+                p
+                for p in image_dir.rglob("*")
+                if p.is_file() and p.suffix.lower() in valid_extensions
+            ]
+        )
+        CONSOLE.print(f"   > Flattening and copying {len(src_images)} images...")
+        for src_path in src_images:
+            rel_path = src_path.relative_to(image_dir)
+            new_name = rel_path.as_posix().replace("/", "__")
+            dst_path = target_images_dir / new_name
+            shutil.copy2(src_path, dst_path)
+            name_map[rel_path.as_posix()] = new_name
+
+        CONSOLE.print("   > Updating COLMAP model...")
+        try:
+            recon = pycolmap.Reconstruction(sfm_dir)
+            for image in recon.images.values():
+                if image.name in name_map:
+                    image.name = name_map[image.name]
+                else:
+                    CONSOLE.print(
+                        f"[bold yellow]Warning: Model image {image.name} not found in source folders.[/bold yellow]"
+                    )
+            recon.write(target_sparse_dir)
+            CONSOLE.print(
+                f"[bold green]✅ Panorama data ready at {target_images_dir}[/bold green]"
+            )
+        except Exception as err:
+            CONSOLE.print(f"[bold red]❌ Failed to update panorama model: {err}[/bold red]")
+
+    elif camera_model in [CameraModel.PINHOLE, CameraModel.SIMPLE_PINHOLE]:
         CONSOLE.print(
             f"[bold green]ℹ️ Camera model is {camera_model.name}. Skipping undistortion.[/bold green]"
         )
