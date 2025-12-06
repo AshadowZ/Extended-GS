@@ -368,7 +368,9 @@ def run_hloc(
 
     if is_panorama:
         camera_mode = pycolmap.CameraMode.PER_FOLDER  # type: ignore
-        CONSOLE.print("[bold green]ℹ️ Creating Panorama Rig Configuration...[/bold green]")
+        CONSOLE.print(
+            "[bold green]ℹ️ Creating Panorama Rig Configuration...[/bold green]"
+        )
         rig_config = create_pano_rig_config()
 
         if references:
@@ -508,7 +510,9 @@ def run_hloc(
                 f"[bold green]✅ Panorama data ready at {target_images_dir}[/bold green]"
             )
         except Exception as err:
-            CONSOLE.print(f"[bold red]❌ Failed to update panorama model: {err}[/bold red]")
+            CONSOLE.print(
+                f"[bold red]❌ Failed to update panorama model: {err}[/bold red]"
+            )
 
     elif camera_model in [CameraModel.PINHOLE, CameraModel.SIMPLE_PINHOLE]:
         CONSOLE.print(

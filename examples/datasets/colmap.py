@@ -432,9 +432,7 @@ class Dataset:
         return len(self.indices)
 
     def _preload_all(self) -> None:
-        device = torch.device(
-            "cuda" if self.preload_mode == "cuda" else "cpu"
-        )
+        device = torch.device("cuda" if self.preload_mode == "cuda" else "cpu")
         self._preload_cache = {}
         for idx in self.indices:
             base = self._load_base_sample(idx)
@@ -518,9 +516,7 @@ class Dataset:
         self, sample: Dict[str, Any], device: torch.device
     ) -> Dict[str, Optional[torch.Tensor]]:
         tensor_sample: Dict[str, Optional[torch.Tensor]] = {}
-        tensor_sample["image"] = (
-            torch.from_numpy(sample["image"]).float().to(device)
-        )
+        tensor_sample["image"] = torch.from_numpy(sample["image"]).float().to(device)
         tensor_sample["depth"] = (
             torch.from_numpy(sample["depth"]).float().to(device)
             if sample["depth"] is not None

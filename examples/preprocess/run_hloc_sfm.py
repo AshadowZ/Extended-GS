@@ -97,11 +97,15 @@ def split_panoramas(
     output_root.mkdir(parents=True, exist_ok=True)
 
     image_exts = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
-    pano_paths = sorted([p for p in image_dir.iterdir() if p.suffix.lower() in image_exts])
+    pano_paths = sorted(
+        [p for p in image_dir.iterdir() if p.suffix.lower() in image_exts]
+    )
     if not pano_paths:
         raise RuntimeError(f"No images found in {image_dir}")
 
-    print(f"🧩 Detected {len(pano_paths)} panoramas. Splitting into perspective views...")
+    print(
+        f"🧩 Detected {len(pano_paths)} panoramas. Splitting into perspective views..."
+    )
     print(f"📂 Output Directory: {output_root}")
 
     first_img = cv2.imread(str(pano_paths[0]))
@@ -143,9 +147,7 @@ def split_panoramas(
                 rays_rotated[..., 2],
             )
             yaw = np.arctan2(x, z)
-            pitch = -np.arctan2(
-                y, np.linalg.norm(rays_rotated[..., [0, 2]], axis=-1)
-            )
+            pitch = -np.arctan2(y, np.linalg.norm(rays_rotated[..., [0, 2]], axis=-1))
 
             u = (1 + yaw / np.pi) / 2 * pano_w
             v = (1 - pitch * 2 / np.pi) / 2 * pano_h
