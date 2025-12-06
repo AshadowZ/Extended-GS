@@ -210,9 +210,17 @@ def main():
         default=1.0,
         help="Downscale factor for panorama splitting (>=1).",
     )
+    parser.add_argument(
+        "--gpu_ba",
+        type=str.lower,
+        choices=["on", "off"],
+        default="off",
+        help="Whether to enable GPU bundle adjustment (default: off).",
+    )
 
     args = parser.parse_args()
     distorted_images_dir = args.input_image_dir.parent / "distorted" / "images"
+    enable_gpu_ba = args.gpu_ba == "on"
 
     if args.is_panorama:
         print("\n🔄 Mode: Panorama Processing")
@@ -234,12 +242,13 @@ def main():
         image_dir=working_dir,
         colmap_dir=colmap_dir,
         camera_model=CameraModel[args.camera_model],
-        verbose=True,
+        verbose=False,
         matching_method=args.matching_method,
         feature_type=args.feature_type,
         matcher_type=args.matcher_type,
         use_single_camera_mode=args.use_single_camera_mode,
         is_panorama=args.is_panorama,
+        enable_gpu_ba=enable_gpu_ba,
     )
 
     project_root = args.input_image_dir.parent

@@ -22,7 +22,7 @@ Requires hloc module from : https://github.com/cvg/Hierarchical-Localization
 import sys
 import shutil
 from pathlib import Path
-from typing import Any, List, Literal, Tuple, Set
+from typing import Any, List, Literal, Optional, Tuple, Set
 
 import cv2
 import numpy as np
@@ -202,6 +202,7 @@ def run_hloc(
     refine_pixsfm: bool = False,
     use_single_camera_mode: bool = True,
     is_panorama: bool = False,
+    enable_gpu_ba: bool = False,
 ) -> None:
     """Runs hloc on the images.
 
@@ -216,6 +217,7 @@ def run_hloc(
         num_matched: Number of image pairs for loc.
         refine_pixsfm: If True, refine the reconstruction using pixel-perfect-sfm.
         use_single_camera_mode: If True, uses one camera for all frames. Otherwise uses one camera per frame.
+        enable_gpu_ba: Whether to enable GPU bundle adjustment in pycolmap.
     """
 
     try:
@@ -299,7 +301,7 @@ def run_hloc(
         pairs_from_sequential.main(
             output=sfm_pairs,
             image_list=references,
-            window_size=10,
+            window_size=8,
             quadratic_overlap=True,
             use_loop_closure=True,
             retrieval_path=retrieval_path,
@@ -314,8 +316,55 @@ def run_hloc(
     match_features.main(matcher_conf, sfm_pairs, features=features, matches=matches)  # type: ignore
 
     image_options = pycolmap.ImageReaderOptions(camera_model=camera_model.value)  # type: ignore
-    mapper_opts: dict[str, Any] = {}
+    mapper_opts: Optional[Any] = None
     rig_config = None
+
+    # Configure IncrementalPipelineOptions following current pycolmap API.
+    try:
+        mapper_opts_candidate = pycolmap.IncrementalPipelineOptions()
+    except Exception:
+        mapper_opts_candidate = None
+
+    if mapper_opts_candidate is not None:
+        mapper_opts = mapper_opts_candidate
+        if hasattr(mapper_opts, "ba_use_gpu"):
+            mapper_opts.ba_use_gpu = enable_gpu_ba
+        if enable_gpu_ba and hasattr(mapper_opts, "ba_gpu_index"):
+            mapper_opts.ba_gpu_index = "0"
+
+        if enable_gpu_ba:
+            local_getter = getattr(mapper_opts, "get_local_bundle_adjustment", None)
+            global_getter = getattr(mapper_opts, "get_global_bundle_adjustment", None)
+            if callable(local_getter) and callable(global_getter):
+                for ba_opts in (local_getter(), global_getter()):
+                    ba_opts.use_gpu = True
+                    ba_opts.gpu_index = "0"
+                    ba_opts.min_num_images_gpu_solver = 50
+            elif all(
+                hasattr(mapper_opts, attr)
+                for attr in ("ba_local_bundle_options", "ba_global_bundle_options")
+            ):
+                for attr in ("ba_local_bundle_options", "ba_global_bundle_options"):
+                    ba_opts = getattr(mapper_opts, attr)
+                    ba_opts.use_gpu = True
+                    ba_opts.gpu_index = "0"
+                    ba_opts.min_num_images_gpu_solver = 50
+            else:
+                CONSOLE.print(
+                    "[bold yellow]⚠️ Unable to locate bundle adjustment accessors on pycolmap "
+                    "IncrementalPipelineOptions; GPU BA settings will not be customized.[/bold yellow]"
+                )
+    else:
+        mapper_opts = {}
+
+    def _assign_mapper_option(option_name: str, value: Any) -> None:
+        nonlocal mapper_opts
+        if mapper_opts is None:
+            mapper_opts = {}
+        if isinstance(mapper_opts, dict):
+            mapper_opts[option_name] = value
+        else:
+            setattr(mapper_opts, option_name, value)
 
     if is_panorama:
         camera_mode = pycolmap.CameraMode.PER_FOLDER  # type: ignore
@@ -342,12 +391,10 @@ def run_hloc(
                 f"[bold green]ℹ️ Initialized Intrinsics: {w}x{h}, params={image_options.camera_params}[/bold green]"
             )
 
-        mapper_opts = {
-            "ba_refine_sensor_from_rig": False,
-            "ba_refine_focal_length": False,
-            "ba_refine_principal_point": False,
-            "ba_refine_extra_params": False,
-        }
+        _assign_mapper_option("ba_refine_sensor_from_rig", False)
+        _assign_mapper_option("ba_refine_focal_length", True)
+        _assign_mapper_option("ba_refine_principal_point", False)
+        _assign_mapper_option("ba_refine_extra_params", False)
     elif use_single_camera_mode:  # one camera per all frames
         camera_mode = pycolmap.CameraMode.SINGLE  # type: ignore
     else:  # one camera per frame
