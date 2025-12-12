@@ -198,6 +198,7 @@ def run_hloc(
         "NN-mutual",
         "adalam",
     ] = "superglue",
+    retrieval_type: Literal["netvlad", "megaloc", "dir", "openibl"] = "netvlad",
     num_matched: int = 50,
     refine_pixsfm: bool = False,
     use_single_camera_mode: bool = True,
@@ -214,6 +215,7 @@ def run_hloc(
         matching_method: Method to use for matching images.
         feature_type: Type of visual features to use.
         matcher_type: Type of feature matcher to use.
+        retrieval_type: Global descriptor to use for retrieval (netvlad/megaloc/etc.).
         num_matched: Number of image pairs for loc.
         refine_pixsfm: If True, refine the reconstruction using pixel-perfect-sfm.
         use_single_camera_mode: If True, uses one camera for all frames. Otherwise uses one camera per frame.
@@ -267,7 +269,7 @@ def run_hloc(
         camera_model = CameraModel.PINHOLE
 
     outputs = colmap_dir
-    sfm_pairs = outputs / "pairs-netvlad.txt"
+    sfm_pairs = outputs / f"pairs-{retrieval_type}.txt"
     features = outputs / "features.h5"
     matches = outputs / "matches.h5"
     # Let COLMAP write every model under distorted/sparse
@@ -276,7 +278,7 @@ def run_hloc(
         shutil.rmtree(sfm_root)
     sfm_root.mkdir(parents=True, exist_ok=True)
 
-    retrieval_conf = extract_features.confs["netvlad"]  # type: ignore
+    retrieval_conf = extract_features.confs[retrieval_type]  # type: ignore
     feature_conf = extract_features.confs[feature_type]  # type: ignore
     matcher_conf = match_features.confs[matcher_type]  # type: ignore
 
@@ -301,7 +303,7 @@ def run_hloc(
         pairs_from_sequential.main(
             output=sfm_pairs,
             image_list=references,
-            window_size=8,
+            window_size=15,
             quadratic_overlap=True,
             use_loop_closure=True,
             retrieval_path=retrieval_path,

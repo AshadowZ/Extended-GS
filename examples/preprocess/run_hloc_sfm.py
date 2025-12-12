@@ -200,6 +200,13 @@ def main():
     )
     parser.add_argument("--feature_type", type=str, default="superpoint_aachen")
     parser.add_argument("--matcher_type", type=str, default="superglue")
+    parser.add_argument(
+        "--retrieval_type",
+        type=str,
+        default="netvlad",
+        choices=["netvlad", "megaloc", "dir", "openibl"],
+        help="Global descriptor used for image retrieval.",
+    )
     parser.add_argument("--use_single_camera_mode", type=bool, default=True)
     parser.add_argument(
         "--is_panorama",
@@ -248,6 +255,7 @@ def main():
         matching_method=args.matching_method,
         feature_type=args.feature_type,
         matcher_type=args.matcher_type,
+        retrieval_type=args.retrieval_type,
         use_single_camera_mode=args.use_single_camera_mode,
         is_panorama=args.is_panorama,
         enable_gpu_ba=enable_gpu_ba,
