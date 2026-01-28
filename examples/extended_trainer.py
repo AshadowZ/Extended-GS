@@ -251,11 +251,15 @@ class Config:
     app_opt_reg: float = 1e-6
 
     # Enable bilateral grid. (experimental)
-    use_bilateral_grid: bool = True
+    use_bilateral_grid: bool = False
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
     # Whether use fused-bilateral grid
-    use_fused_bilagrid: bool = True
+    use_fused_bilagrid: bool = False
+    # Enable PPISP as an alternative post-processing module (experimental).
+    # PPISP is used to decouple per-training-view ISP effects (e.g., exposure/WB) similarly
+    # to bilateral_grid, but without controller distillation in this trainer.
+    use_ppisp: bool = False
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -458,6 +462,20 @@ class Runner:
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
+        if cfg.use_ppisp and (cfg.use_bilateral_grid or cfg.use_fused_bilagrid):
+            raise ValueError(
+                "PPISP and bilateral_grid are mutually exclusive. "
+                "Set --use_bilateral_grid False and --use_fused_bilagrid False when using --use_ppisp."
+            )
+        if cfg.use_ppisp and cfg.batch_size != 1:
+            raise ValueError(
+                f"PPISP post-processing requires batch_size=1, got batch_size={cfg.batch_size}"
+            )
+        if cfg.use_ppisp and world_size > 1:
+            raise ValueError(
+                f"PPISP post-processing requires single-GPU training, but world_size={world_size}."
+            )
+
         # Model
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
@@ -565,6 +583,41 @@ class Runner:
                     eps=1e-15,
                 ),
             ]
+
+        self.ppisp_module = None
+        self.ppisp_optimizers = []
+        if cfg.use_ppisp:
+            try:
+                from ppisp import PPISP, PPISPConfig  # type: ignore
+            except ImportError as e:
+                raise ImportError(
+                    "To use PPISP, install the `ppisp` package (see gsplat's ppisp integration for details)."
+                ) from e
+
+            try:
+                ppisp_config = PPISPConfig(
+                    use_controller=False,
+                    controller_distillation=False,
+                    controller_activation_ratio=0.0,
+                )
+            except TypeError:
+                # Backwards/forwards compatibility with different PPISPConfig signatures.
+                try:
+                    ppisp_config = PPISPConfig(
+                        use_controller=False,
+                        controller_distillation=False,
+                    )
+                except TypeError:
+                    ppisp_config = PPISPConfig()
+
+            # Extended-GS datasets currently do not expose multi-camera indices, so we
+            # use a single camera and per-frame (per-image) parameters.
+            self.ppisp_module = PPISP(
+                num_cameras=1,
+                num_frames=len(self.trainset),
+                config=ppisp_config,
+            ).to(self.device)
+            self.ppisp_optimizers = self.ppisp_module.create_optimizers()
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -699,6 +752,19 @@ class Runner:
                     ]
                 )
             )
+        if cfg.use_ppisp:
+            assert self.ppisp_module is not None
+            try:
+                ppisp_schedulers = self.ppisp_module.create_schedulers(
+                    self.ppisp_optimizers,
+                    max_optimization_iters=max_steps,
+                )
+            except TypeError:
+                # Compatibility with older/newer signatures.
+                ppisp_schedulers = self.ppisp_module.create_schedulers(
+                    self.ppisp_optimizers, max_steps
+                )
+            schedulers.extend(ppisp_schedulers)
 
         pin_memory = cfg.dataset_preload != "cuda"
         train_num_workers = 0 if cfg.dataset_preload == "cuda" else 8
@@ -715,6 +781,7 @@ class Runner:
         # Training loop.
         global_tic = time.time()
         cached_grid_xy = None
+        cached_pixel_coords = None
         cached_h, cached_w = -1, -1
 
         pbar = tqdm.tqdm(range(init_step, max_steps))
@@ -868,6 +935,33 @@ class Runner:
                     colors,
                     image_ids.unsqueeze(-1),
                 )["rgb"]
+            elif cfg.use_ppisp:
+                assert self.ppisp_module is not None
+                # PPISP uses pixel coordinates in image space (+0.5 center offset).
+                if (
+                    cached_pixel_coords is None
+                    or cached_h != height
+                    or cached_w != width
+                ):
+                    cached_h, cached_w = height, width
+                    pixel_y, pixel_x = torch.meshgrid(
+                        torch.arange(height, device=self.device) + 0.5,
+                        torch.arange(width, device=self.device) + 0.5,
+                        indexing="ij",
+                    )
+                    cached_pixel_coords = torch.stack(
+                        [pixel_x, pixel_y], dim=-1
+                    ).detach()  # [H, W, 2]
+
+                frame_idx = int(image_ids.item())
+                colors = self.ppisp_module(
+                    rgb=colors,
+                    pixel_coords=cached_pixel_coords,
+                    resolution=(width, height),
+                    camera_idx=0,
+                    frame_idx=frame_idx,
+                    exposure_prior=None,
+                )
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -901,6 +995,10 @@ class Runner:
                 active_grids = self.bil_grids.grids[unique_grid_ids]
                 tvloss = 10 * total_variation_loss(active_grids)
                 loss += tvloss
+            elif cfg.use_ppisp:
+                assert self.ppisp_module is not None
+                ppisp_reg_loss = self.ppisp_module.get_regularization_loss()
+                loss += ppisp_reg_loss
 
             # depth loss
             if need_depth_prior:
@@ -1083,6 +1181,10 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.use_bilateral_grid:
                     self.writer.add_scalar("train/tvloss", tvloss.item(), step)
+                if cfg.use_ppisp:
+                    self.writer.add_scalar(
+                        "train/ppisp_reg_loss", ppisp_reg_loss.item(), step
+                    )
                 if need_depth_prior:
                     self.writer.add_scalar("train/depthloss", depth_loss.item(), step)
                 if (
@@ -1138,6 +1240,8 @@ class Runner:
                         data["app_module"] = self.app_module.module.state_dict()
                     else:
                         data["app_module"] = self.app_module.state_dict()
+                if cfg.use_ppisp and self.ppisp_module is not None:
+                    data["ppisp"] = self.ppisp_module.state_dict()
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
@@ -1246,6 +1350,9 @@ class Runner:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.bil_grid_optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            for optimizer in self.ppisp_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
@@ -1725,6 +1832,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         ]
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+        if cfg.use_ppisp and runner.ppisp_module is not None:
+            ppisp_state = ckpts[0].get("ppisp")
+            if ppisp_state is not None:
+                runner.ppisp_module.load_state_dict(ppisp_state)
         step = ckpts[0]["step"]
         runner.eval(step=step)
         runner.render_traj(step=step)

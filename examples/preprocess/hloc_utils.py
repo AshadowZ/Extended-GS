@@ -303,7 +303,7 @@ def run_hloc(
         pairs_from_sequential.main(
             output=sfm_pairs,
             image_list=references,
-            window_size=15,
+            window_size=8,
             quadratic_overlap=True,
             use_loop_closure=True,
             retrieval_path=retrieval_path,

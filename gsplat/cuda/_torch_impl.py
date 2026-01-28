@@ -514,7 +514,7 @@ def accumulate(
     image_width: int,
     image_height: int,
 ) -> Tuple[Tensor, Tensor]:
-    """Alpah compositing of 2D Gaussians in Pure Pytorch.
+    """Alpha compositing of 2D Gaussians in Pure Pytorch.
 
     This function performs alpha compositing for Gaussians based on the pair of indices
     {gaussian_ids, pixel_ids, image_ids}, which annotates the intersection between all
@@ -616,7 +616,7 @@ def _rasterize_to_pixels(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., channels]
     batch_per_iter: int = 100,
-):
+) -> Tuple[Tensor, Tensor]:
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
 
     This function rasterizes 2D Gaussians to pixels in a Pytorch-friendly way. It
